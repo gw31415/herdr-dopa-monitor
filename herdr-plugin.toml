@@ -1,0 +1,45 @@
+id = "dopa-macos"
+name = "dopa macOS Sleep Guard"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Session-scoped LaunchAgent keeps macOS awake with dopa while herdr agents work; controlled via the guard CLI (no curses, no fullscreen)."
+platforms = ["macos"]
+
+# The monitor runs as a session-scoped LaunchAgent (sync with the
+# `sync-launchagent` action). All control — on/off (arm/disarm), settings,
+# and status — happens through `scripts/guard.py`.
+#
+# NOTE: herdr 0.9.0 removed the `herdr plugin` subcommand, so these actions
+# are currently documentation for when plugin support returns. Everything
+# works standalone today: run `python3 scripts/guard.py ...` directly.
+
+[[actions]]
+id = "status"
+title = "Print dopa monitor status"
+contexts = ["workspace"]
+command = ["python3", "scripts/guard.py", "status"]
+
+[[actions]]
+id = "sync-launchagent"
+title = "Sync this session LaunchAgent to current agent count"
+contexts = ["workspace"]
+command = ["python3", "scripts/guard.py", "sync"]
+
+[[actions]]
+id = "install-launchagent"
+title = "Install this session monitor LaunchAgent"
+contexts = ["workspace"]
+command = ["python3", "scripts/guard.py", "install"]
+
+[[actions]]
+id = "uninstall-launchagent"
+title = "Uninstall this session monitor LaunchAgent"
+contexts = ["workspace"]
+command = ["python3", "scripts/guard.py", "uninstall"]
+
+# Non-interactive status rendered inside a herdr pane (plain text, no curses).
+[[panes]]
+id = "status"
+title = "dopa Sleep Guard"
+placement = "overlay"
+command = ["python3", "scripts/guard.py", "status"]
