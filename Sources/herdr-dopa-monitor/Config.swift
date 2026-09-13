@@ -5,8 +5,9 @@ import Foundation
 /// Settings live in `config.json` under the config directory; runtime state
 /// lives in `state.json` under the state directory. Both resolve to
 /// per-session subdirectories so concurrent herdr sessions stay isolated.
-/// The daemon re-reads `config.json` every poll cycle, so `herdr-dopa set`
-/// takes effect within one cycle without reinstalling the LaunchAgent.
+/// The daemon re-reads `config.json` every poll cycle, so
+/// `herdr-dopa-monitor set` takes effect within one cycle without
+/// reinstalling the LaunchAgent.
 ///
 /// Load precedence: environment (when set and non-empty) > config.json >
 /// built-in default. Mirrors the original Python `config.py`.
@@ -30,22 +31,22 @@ enum Config {
     ]
 
     /// Standalone fallback root (also where pre-herdr runs keep working).
-    private static func legacyDir() -> String {
-        NSHomeDirectory() + "/Library/Application Support/herdr-dopa"
+    private static func standaloneDir() -> String {
+        NSHomeDirectory() + "/Library/Application Support/herdr-dopa-monitor"
     }
 
     static func configDir() -> String {
         if let override = Env.getNonEmpty("HERDR_DOPA_CONFIG_DIR") {
             return override
         }
-        return legacyDir()
+        return standaloneDir()
     }
 
     static func stateDir() -> String {
         if let override = Env.getNonEmpty("HERDR_DOPA_STATE_DIR") {
             return override
         }
-        return legacyDir()
+        return standaloneDir()
     }
 
     static func configPath() -> String {

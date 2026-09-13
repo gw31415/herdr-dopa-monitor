@@ -6,7 +6,7 @@ import Foundation
 /// herdr UI being reachable. Raw socket JSON is deliberately not used — the
 /// CLI path via HERDR_BIN_PATH is the portable plugin API.
 enum HerdrCli {
-    static let sourceID = "dopa-macos"
+    static let sourceID = "herdr-dopa-monitor"
 
     /// herdr binary for UI calls: HERDR_BIN_PATH only (set by herdr for plugin
     /// commands and panes). Missing -> caller skips silently.
@@ -51,7 +51,7 @@ enum HerdrCli {
         return ProcRunner.capture(argv, timeout: 10) != nil
     }
 
-    /// `herdr pane report-metadata <pane> --source dopa-macos ...`
+    /// `herdr pane report-metadata <pane> --source herdr-dopa-monitor ...`
     /// (best-effort; skipped when no pane id resolves). A TTL keeps stale
     /// guard metadata from lingering if the daemon dies.
     @discardableResult

@@ -1,25 +1,25 @@
 import Foundation
 
-/// The `herdr-dopa` control surface: a single command with subcommands
-/// (replaces the old Python guard.py). Works in any terminal, inside herdr
-/// panes, over pipes, and from scripts.
+/// The `herdr-dopa-monitor` control surface: a single command with
+/// subcommands (replaces the old Python guard.py). Works in any terminal,
+/// inside herdr panes, over pipes, and from scripts.
 enum GuardCLI {
     static let usage = """
-        herdr-dopa — control the herdr dopa sleep guard
+        herdr-dopa-monitor — control the herdr dopa sleep guard
 
         USAGE:
-          herdr-dopa status [--json] [--watch [SEC]]   show guard / agents / dopa state
-          herdr-dopa on | off                          arm / disarm the guard
-          herdr-dopa get [KEY]                         show config (all keys, or one)
-          herdr-dopa set KEY VALUE                     change config (validated)
-          herdr-dopa install                           install/refresh this session's LaunchAgent
-          herdr-dopa sync                              match the LaunchAgent to the live agent count
-          herdr-dopa uninstall [--cleanup]             remove the LaunchAgent (and optionally data)
-          herdr-dopa once | daemon                     one monitor iteration / the daemon loop
-          herdr-dopa event                             event hook: one immediate iteration
-          herdr-dopa logs [-n LINES]                   tail the daemon log
-          herdr-dopa report-metadata                   push guard state to the herdr pane UI
-          herdr-dopa notify TITLE [--body TEXT]        show a herdr notification
+          herdr-dopa-monitor status [--json] [--watch [SEC]]   show guard / agents / dopa state
+          herdr-dopa-monitor on | off                          arm / disarm the guard
+          herdr-dopa-monitor get [KEY]                         show config (all keys, or one)
+          herdr-dopa-monitor set KEY VALUE                     change config (validated)
+          herdr-dopa-monitor install                           install/refresh this session's LaunchAgent
+          herdr-dopa-monitor sync                              match the LaunchAgent to the live agent count
+          herdr-dopa-monitor uninstall [--cleanup]             remove the LaunchAgent (and optionally data)
+          herdr-dopa-monitor once | daemon                     one monitor iteration / the daemon loop
+          herdr-dopa-monitor event                             event hook: one immediate iteration
+          herdr-dopa-monitor logs [-n LINES]                   tail the daemon log
+          herdr-dopa-monitor report-metadata                   push guard state to the herdr pane UI
+          herdr-dopa-monitor notify TITLE [--body TEXT]        show a herdr notification
 
         Config edits send SIGHUP to the running daemon best-effort (via
         launchctl kill); SIGHUP interrupts the daemon's sleep so the change
@@ -159,7 +159,7 @@ enum GuardCLI {
         let ms = data.monitorState
         var head = "\(stateColor(st, ms)) dopa guard — "
         if !data.armed {
-            head += st.dim("paused (off)") + st.dim("  ·  `herdr-dopa on` to resume")
+            head += st.dim("paused (off)") + st.dim("  ·  `herdr-dopa-monitor on` to resume")
         } else if ms == "on" {
             head += st.bold(st.green("guarding")) + st.dim("  ·  \(data.agents.working) working")
         } else if ms == "error" {
@@ -462,6 +462,16 @@ enum GuardCLI {
                 print("[uninstall] no plist at \(plistDest); nothing to remove.")
             }
 
+            // Sweep this session's leftover pre-rename agent (com.herdr.*)
+            // as well; other sessions are never touched.
+            if LaunchAgent.cleanupLegacyAgent(
+                currentLabel: p.label,
+                homeDir: NSHomeDirectory(),
+                log: { print("[uninstall] \($0)") })
+            {
+                print("[uninstall] removed legacy pre-rename LaunchAgent for this session.")
+            }
+
             if cleanup {
                 for dir in [p.logDir, p.stateDir] {
                     if FileManager.default.fileExists(atPath: dir) {
@@ -491,21 +501,24 @@ enum GuardCLI {
     // MARK: - once / daemon / logs
 
     static func cmdOnce() -> Int32 {
-        withSessionEnv { _ in
+        withSessionEnv { p in
+            LaunchAgent.migrateLegacyDataDirs(current: p, log: { monitorLog($0) })
             runOnce(cfg: loadMonitorConfig())
             return 0
         }
     }
 
     static func cmdEvent() -> Int32 {
-        withSessionEnv { _ in
+        withSessionEnv { p in
+            LaunchAgent.migrateLegacyDataDirs(current: p, log: { monitorLog($0) })
             runEventHook(cfg: loadMonitorConfig())
             return 0
         }
     }
 
     static func cmdDaemon() -> Int32 {
-        withSessionEnv { _ in
+        withSessionEnv { p in
+            LaunchAgent.migrateLegacyDataDirs(current: p, log: { monitorLog($0) })
             let cfg = loadMonitorConfig()
             let statePath = cfg.statePath
             runDaemon(initialCfg: cfg) { event in
@@ -597,7 +610,7 @@ enum GuardCLI {
             return cmdGet(rest.first)
         case "set":
             guard rest.count == 2 else {
-                errPrint("usage: herdr-dopa set KEY VALUE\nkeys: "
+                errPrint("usage: herdr-dopa-monitor set KEY VALUE\nkeys: "
                     + Config.SET_KEYS.joined(separator: ", "))
                 return 2
             }
@@ -642,7 +655,7 @@ enum GuardCLI {
                 i += 1
             }
             guard let title else {
-                errPrint("usage: herdr-dopa notify TITLE [--body TEXT]")
+                errPrint("usage: herdr-dopa-monitor notify TITLE [--body TEXT]")
                 return 2
             }
             return cmdNotify(title, body)

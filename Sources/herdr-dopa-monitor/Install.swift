@@ -4,7 +4,7 @@ import Foundation
 /// install helpers, with the Swift binary replacing the Python interpreter.
 
 func templatePath() -> String {
-    pluginRoot() + "/launchagents/com.herdr.dopa.monitor.plist.template"
+    pluginRoot() + "/launchagents/com.amas.herdr.dopa.monitor.plist.template"
 }
 
 /// Absolute herdr path to bake into the LaunchAgent (minimal PATH there).
@@ -12,8 +12,8 @@ func resolveHerdrBinOrExit() -> String {
     let herdr = Env.get("HERDR_BIN_PATH") ?? which("herdr")
     guard let herdr else {
         FileHandle.standardError.write((
-            "Could not find herdr on PATH. Run `herdr-dopa install` from a shell "
-            + "that has herdr, or set HERDR_BIN_PATH to the absolute binary.\n"
+            "Could not find herdr on PATH. Run `herdr-dopa-monitor install` from a "
+            + "shell that has herdr, or set HERDR_BIN_PATH to the absolute binary.\n"
         ).data(using: .utf8)!)
         exit(1)
     }
@@ -29,7 +29,7 @@ func resolveGuardBin() -> String {
     let exeRaw = exeURL?.path ?? CommandLine.arguments.first ?? ""
     let exe = FsUtil.realPath(exeRaw) ?? exeRaw
     let root = pluginRoot()
-    let releaseCandidate = root + "/.build/release/herdr-dopa"
+    let releaseCandidate = root + "/.build/release/herdr-dopa-monitor"
     if let releaseReal = FsUtil.realPath(releaseCandidate), exe == releaseReal {
         return exe
     }
@@ -64,19 +64,41 @@ func renderPlist(homeDir: String, p: LAPaths) throws -> String {
 func doInstall() throws -> LAPaths {
     let homeDir = NSHomeDirectory()
     let p = try LaunchAgent.paths(homeDir: homeDir)
+    // Pin the resolved per-session dirs so config/state land in the right
+    // place for the migration below, the seeding, and any subprocess
+    // spawned after this.
+    Env.set("HERDR_DOPA_CONFIG_DIR", p.configDir)
+    Env.set("HERDR_DOPA_STATE_DIR", p.stateDir)
+
+    // One-time data-dir migration (herdr-dopa -> herdr-dopa-monitor), before
+    // any mkdirp/seed below creates the new dirs: it only moves when the new
+    // dir is still missing, so a re-install never merges or deletes data.
+    if LaunchAgent.migrateLegacyDataDirs(
+        current: p, homeDir: homeDir, log: { print("[install] \($0)") })
+    {
+        print("[install] migrated legacy data dirs to the herdr-dopa-monitor layout.")
+    }
+
     FsUtil.mkdirp(p.logDir)
     FsUtil.mkdirp(p.configDir)
     FsUtil.mkdirp(p.stateDir)
     FsUtil.mkdirp(homeDir + "/Library/LaunchAgents")
-    // Pin the resolved per-session dirs so config/state land in the right
-    // place for seeding here and for any subprocess spawned below.
-    Env.set("HERDR_DOPA_CONFIG_DIR", p.configDir)
-    Env.set("HERDR_DOPA_STATE_DIR", p.stateDir)
 
     // Seed config.json with defaults if absent. Never overwrite (user edits).
     if !FsUtil.isFile(Config.configPath()) {
         try? Config.saveConfigFile(Config.defaultConfig())
         print("[install] wrote default config: \(Config.configPath())")
+    }
+
+    // Migration from the pre-rename label base (com.herdr.dopa.monitor.*):
+    // boot out and delete this session's stale legacy agent, if any. Same
+    // slug only — other sessions are never touched.
+    if LaunchAgent.cleanupLegacyAgent(
+        currentLabel: p.label,
+        homeDir: homeDir,
+        log: { print("[install] \($0)") })
+    {
+        print("[install] migrated to new label: \(p.label)")
     }
 
     try renderPlist(homeDir: homeDir, p: p).write(

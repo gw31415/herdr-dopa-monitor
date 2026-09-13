@@ -1,91 +1,91 @@
-id = "dopa-macos"
+id = "herdr-dopa-monitor"
 name = "dopa macOS Sleep Guard"
-version = "0.2.0"
+version = "0.3.0"
 min_herdr_version = "0.9.0"
-description = "Session-scoped LaunchAgent keeps macOS awake with dopa while herdr agents work; controlled via the herdr-dopa binary (plain-text status pane, no fullscreen TUI)."
+description = "Session-scoped LaunchAgent keeps macOS awake with dopa while herdr agents work; controlled via the herdr-dopa-monitor binary (plain-text status pane, no fullscreen TUI)."
 platforms = ["macos"]
 
 # The monitor runs as a session-scoped LaunchAgent (sync with the
 # `sync-launchagent` action). All control — on/off (arm/disarm), settings,
-# and status — happens through the `herdr-dopa` Swift binary built by the
-# [[build]] step (`swift build -c release`). Actions run with the plugin
-# directory as cwd and receive HERDR_PLUGIN_ROOT, so they exec the release
-# artifact under .build directly.
+# and status — happens through the `herdr-dopa-monitor` Swift binary built
+# by the [[build]] step (`swift build -c release`). Actions run with the
+# plugin directory as cwd and receive HERDR_PLUGIN_ROOT, so they exec the
+# release artifact under .build directly.
 
 [[build]]
 platforms = ["macos"]
 command = ["swift", "build", "-c", "release"]
 
 # Event-driven wakeups. herdr runs these hooks the moment pane/agent state
-# changes; `herdr-dopa event` performs exactly one state-locked monitor
-# iteration, so the guard reacts immediately instead of waiting for the next
-# poll. The 5s poll daemon stays as the safety net (missed events, herdr
-# restarts, reconnects). The binary tolerates unknown/missing/malformed
+# changes; `herdr-dopa-monitor event` performs exactly one state-locked
+# monitor iteration, so the guard reacts immediately instead of waiting for
+# the next poll. The 5s poll daemon stays as the safety net (missed events,
+# herdr restarts, reconnects). The binary tolerates unknown/missing/malformed
 # event payloads by simply behaving like `once`.
 [[startup]]
 platforms = ["macos"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" event"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" event"]
 
 [[events]]
 on = "pane.agent_status_changed"
 platforms = ["macos"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" event"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" event"]
 
 [[events]]
 on = "pane.agent_detected"
 platforms = ["macos"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" event"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" event"]
 
 [[events]]
 on = "pane.created"
 platforms = ["macos"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" event"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" event"]
 
 [[events]]
 on = "pane.closed"
 platforms = ["macos"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" event"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" event"]
 
 [[events]]
 on = "pane.exited"
 platforms = ["macos"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" event"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" event"]
 
 [[actions]]
 id = "status"
 title = "Print dopa monitor status"
 contexts = ["workspace"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" status"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" status"]
 
 [[actions]]
 id = "on"
 title = "Arm the dopa guard"
 contexts = ["workspace"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" on"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" on"]
 
 [[actions]]
 id = "off"
 title = "Pause the dopa guard (stops only the owned dopa session)"
 contexts = ["workspace"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" off"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" off"]
 
 [[actions]]
 id = "sync-launchagent"
 title = "Sync this session LaunchAgent to current agent count"
 contexts = ["workspace"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" sync"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" sync"]
 
 [[actions]]
 id = "install-launchagent"
 title = "Install this session monitor LaunchAgent"
 contexts = ["workspace"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" install"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" install"]
 
 [[actions]]
 id = "uninstall-launchagent"
 title = "Uninstall this session monitor LaunchAgent"
 contexts = ["workspace"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" uninstall"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" uninstall"]
 
 # Non-interactive status rendered inside a herdr pane: plain text refreshed
 # every poll (--watch), with ANSI color when the pane is a TTY.
@@ -93,4 +93,4 @@ command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" un
 id = "status"
 title = "dopa Sleep Guard"
 placement = "overlay"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa\" status --watch"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.build/release/herdr-dopa-monitor\" status --watch"]

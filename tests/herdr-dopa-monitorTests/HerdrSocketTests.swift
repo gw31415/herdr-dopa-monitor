@@ -1,6 +1,6 @@
 import XCTest
 import Darwin
-@testable import herdr_dopa
+@testable import herdr_dopa_monitor
 
 /// A one-shot Unix-socket server that speaks the herdr agent.list protocol:
 /// reads one newline-terminated JSON request, answers with a canned response.

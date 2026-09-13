@@ -1,5 +1,5 @@
 import XCTest
-@testable import herdr_dopa
+@testable import herdr_dopa_monitor
 
 let DOPA_EVENT_STUB = """
 #!/bin/sh
@@ -7,10 +7,11 @@ trap 'exit 0' TERM
 while true; do sleep 0.2; done
 """
 
-/// Tests for the event hook path (`herdr-dopa event`): HERDR_PLUGIN_EVENT /
-/// HERDR_PLUGIN_EVENT_JSON parsing, degraded (once-equivalent) behavior on
-/// unknown / missing / malformed event data, the flock state lock, and
-/// double-run safety of the locked iteration when two runners race.
+/// Tests for the event hook path (`herdr-dopa-monitor event`):
+/// HERDR_PLUGIN_EVENT / HERDR_PLUGIN_EVENT_JSON parsing, degraded
+/// (once-equivalent) behavior on unknown / missing / malformed event data,
+/// the flock state lock, and double-run safety of the locked iteration when
+/// two runners race.
 final class EventHookTests: XCTestCase {
 
     var tmpDir: String = ""

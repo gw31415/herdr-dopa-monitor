@@ -7,10 +7,10 @@ import Darwin
 /// away, all-idle stops it right away. The owned session is exactly the child
 /// process: ending it ends only our session. Ported from `monitor.py`.
 ///
-/// Hybrid timing: herdr plugin event hooks (`herdr-dopa event`) trigger one
-/// locked iteration the moment pane/agent state changes, while the poll
-/// daemon (default 5s) remains as the safety net for missed events and
-/// reconnects. All state writers serialize through `StateLock`.
+/// Hybrid timing: herdr plugin event hooks (`herdr-dopa-monitor event`)
+/// trigger one locked iteration the moment pane/agent state changes, while
+/// the poll daemon (default 5s) remains as the safety net for missed events
+/// and reconnects. All state writers serialize through `StateLock`.
 
 // Valid monitor states.
 let MONITOR_STATES = ["off", "on", "error"]
@@ -451,9 +451,9 @@ private func printMonitorSummary(_ ctx: MonitorCtx) {
 
 // MARK: - Event hooks (herdr plugin integration)
 
-/// What herdr told us when it invoked `herdr-dopa event`. Both fields are
-/// best-effort: any missing or malformed piece degrades to "run one
-/// iteration now" rather than failing the hook.
+/// What herdr told us when it invoked `herdr-dopa-monitor event`. Both
+/// fields are best-effort: any missing or malformed piece degrades to "run
+/// one iteration now" rather than failing the hook.
 struct PluginEventInfo {
     /// HERDR_PLUGIN_EVENT value ("startup", an event name, or empty).
     var name: String
@@ -483,12 +483,13 @@ func runOnce(cfg: MonitorConfig) {
     printMonitorSummary(ctx)
 }
 
-/// Event-hook entrypoint (`herdr-dopa event`). herdr invokes this from the
-/// manifest's `[[events]]` / `[[startup]]` hooks with HERDR_PLUGIN_EVENT (and
-/// HERDR_PLUGIN_EVENT_JSON) in the environment; it runs exactly one locked
-/// iteration so pane/agent changes reach the guard immediately instead of
-/// waiting for the next poll. Unknown, missing, or malformed event data is
-/// not an error — the hook then simply behaves like `once`.
+/// Event-hook entrypoint (`herdr-dopa-monitor event`). herdr invokes this
+/// from the manifest's `[[events]]` / `[[startup]]` hooks with
+/// HERDR_PLUGIN_EVENT (and HERDR_PLUGIN_EVENT_JSON) in the environment; it
+/// runs exactly one locked iteration so pane/agent changes reach the guard
+/// immediately instead of waiting for the next poll. Unknown, missing, or
+/// malformed event data is not an error — the hook then simply behaves
+/// like `once`.
 func runEventHook(cfg: MonitorConfig) {
     let info = readPluginEvent()
     let name = info.name.isEmpty ? "unnamed" : info.name

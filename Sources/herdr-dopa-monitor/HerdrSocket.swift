@@ -37,7 +37,7 @@ enum HerdrSocket {
     /// result.agents[].agent_status. Throws HerdrError on any failure.
     static func agentStatusesFromSocket(_ socketPath: String) throws -> [String] {
         let request: [String: Any] = [
-            "id": "herdr-dopa:agent:list",
+            "id": "herdr-dopa-monitor:agent:list",
             "method": "agent.list",
             "params": [String: Any](),
         ]

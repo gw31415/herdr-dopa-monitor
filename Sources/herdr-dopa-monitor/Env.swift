@@ -96,7 +96,7 @@ enum FsUtil {
         try data.write(to: URL(fileURLWithPath: tmp))
         if rename(tmp, path) != 0 {
             throw NSError(
-                domain: "herdr-dopa", code: Int(errno),
+                domain: "herdr-dopa-monitor", code: Int(errno),
                 userInfo: [NSLocalizedDescriptionKey:
                     "rename(\(tmp), \(path)) failed: \(String(cString: strerror(errno)))"])
         }

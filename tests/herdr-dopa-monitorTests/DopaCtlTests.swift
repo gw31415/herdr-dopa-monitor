@@ -1,5 +1,5 @@
 import XCTest
-@testable import herdr_dopa
+@testable import herdr_dopa_monitor
 
 let DOPA_STUB = """
 #!/bin/sh

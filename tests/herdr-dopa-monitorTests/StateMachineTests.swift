@@ -1,5 +1,5 @@
 import XCTest
-@testable import herdr_dopa
+@testable import herdr_dopa_monitor
 
 /// Unit tests for the pure monitor logic: state machine, transition side
 /// effects (owned dopa child), one-iteration flows with injected fakes, and

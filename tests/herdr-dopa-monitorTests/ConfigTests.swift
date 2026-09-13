@@ -1,5 +1,5 @@
 import XCTest
-@testable import herdr_dopa
+@testable import herdr_dopa_monitor
 
 /// Unit tests for config load/save/validate/env-overrides (isolated config
 /// dir via HERDR_DOPA_CONFIG_DIR).

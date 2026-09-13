@@ -1,7 +1,7 @@
 import Foundation
 
 @main
-enum HerdrDopaMain {
+enum HerdrDopaMonitorMain {
     static func main() {
         let argv = Array(CommandLine.arguments.dropFirst())
         exit(GuardCLI.main(argv))

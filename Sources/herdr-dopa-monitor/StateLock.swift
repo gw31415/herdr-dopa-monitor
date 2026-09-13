@@ -4,12 +4,13 @@ import Darwin
 /// Cross-process mutual exclusion for monitor state updates.
 ///
 /// Three kinds of runners mutate `<state_dir>/state.json`: the poll daemon,
-/// `herdr-dopa once`, and `herdr-dopa event` (invoked by herdr plugin event
-/// hooks, potentially at the same moment the daemon is iterating). Each holds
-/// an advisory POSIX `flock` on `<state_dir>/monitor.lock` across its whole
-/// load -> iterate -> save critical section, so two runners can never
-/// double-spawn or double-terminate the owned dopa child. Foundation/Darwin
-/// only; no external dependencies.
+/// `herdr-dopa-monitor once`, and `herdr-dopa-monitor event` (invoked by
+/// herdr plugin event hooks, potentially at the same moment the daemon is
+/// iterating). Each holds an advisory POSIX `flock` on
+/// `<state_dir>/monitor.lock` across its whole load -> iterate -> save
+/// critical section, so two runners can never double-spawn or
+/// double-terminate the owned dopa child. Foundation/Darwin only; no
+/// external dependencies.
 ///
 /// `flock` locks are per open file description, so this works both between
 /// processes and between two opens inside one process. The flip side: the
