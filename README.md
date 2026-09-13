@@ -2,122 +2,125 @@
 
 A macOS [herdr](https://github.com/gw31415/herdr) sleep guard that keeps the machine awake
 with [dopa](https://github.com/gw31415/dopa) while agents work: any `working` agent makes it
-hold one owned `dopa` child process, and the first all-idle observation ends it. The guard is
-a single Foundation-only Swift binary; a `dopa` session lives exactly as long as its process,
-so it can never leak wakefulness or disturb your manual sessions.
+hold one owned `dopa` session, and the first all-idle observation ends it. One machine
+holds exactly one session, shared across all herdr sessions. The guard is event-driven
+shell only — no build, no daemon, nothing runs in the background. A `dopa` session lives
+exactly as long as its holder connection, so the guard can never leak wakefulness or
+disturb your manual sessions.
 
-## Features
-
-- Session-scoped per-user LaunchAgent, started/stopped with agent count.
-- One CLI (`herdr-dopa-monitor`) for status, on/off, settings, install/uninstall — plain text
-  over pipes, color dashboard on a TTY, `--json` for scripts, `--watch` live view.
-- Immediate start/stop: any `working` agent starts dopa instantly; the first all-idle
-  observation stops it — no grace periods, no hysteresis.
-- Hybrid timing: herdr event hooks trigger a state-locked iteration the moment pane/agent
-  state changes; the poll daemon (default 5s) is the safety net.
-- herdr UI integration: reports state to the owning pane and posts notifications at guard
-  transitions — best-effort, silent when herdr is unreachable.
+Pause and resume via herdr itself: `herdr plugin disable herdr-dopa-monitor` stops the
+guard (hooks stop firing and the owned session is ended), `herdr plugin enable
+herdr-dopa-monitor` resumes it.
 
 ## Requirements
 
-- macOS 13+ with the `dopa-daemon` service installed (`sudo dopa-daemon install`).
-- `dopa` CLI (default: `/Users/ama/dopa/.build/Dopa.app/Contents/Helpers/dopa`; override with
-  `herdr-dopa-monitor set dopa_bin PATH` or `DOPA_BIN`).
-- herdr 0.9.0+ on `PATH` (or `HERDR_BIN_PATH` set) for live observation and plugin actions.
-- Swift 5.9+ toolchain (Xcode Command Line Tools) to build.
+- macOS with the `dopa-daemon` service installed (`sudo dopa-daemon install`).
+- herdr 0.9.0+ for live observation and plugin actions.
+- Stock tools only (`sh`, `nc`, `grep`, `kill`, `launchctl`) — no toolchain, no packages.
 
-## Build
+## Quick install
 
 ```sh
-swift build -c release        # binary at .build/release/herdr-dopa-monitor
-swift test                    # unit tests (state machine, config, paths, socket)
+herdr plugin install gw31415/herdr-dopa-monitor
 ```
 
-`herdr plugin install` runs the same build via the manifest's `[[build]]` step; for local
-development `herdr plugin link .` links the working tree (build it yourself first).
+That is the whole flow: herdr registers the hooks, and from the first event on the guard
+follows the agent state. No build step, no AppleScript, no Automation access, no
+permission prompts.
 
-## Install
+## Manual install
+
+For a local checkout (no build needed — it is all shell):
 
 ```sh
-swift build -c release
-.build/release/herdr-dopa-monitor install
-.build/release/herdr-dopa-monitor sync
+git clone https://github.com/gw31415/herdr-dopa-monitor.git
+cd herdr-dopa-monitor
+herdr plugin link .
 ```
 
-Or via the plugin: `herdr plugin link .` and the `install-launchagent` action. The installer
-resolves the `herdr` binary path and current session, seeds the per-session config (never
-overwrites yours), registers the LaunchAgent (stopped; `sync` starts it when agents exist),
-and logs to `~/Library/Logs/herdr-dopa-monitor/<session>/` — no AppleScript, no Automation
-access, no permission prompts.
+Before disabling, run the `stop` action (or `sh guard/stop.sh`) so the owned
+`dopa` session is ended first. Before removing the plugin entirely:
+
+```sh
+sh guard/stop.sh  # end the owned dopa session
+herdr plugin uninstall herdr-dopa-monitor
+```
 
 ## Usage
 
 ```sh
-herdr-dopa-monitor status          # dashboard (or --json, or --watch for a live view)
-herdr-dopa-monitor off             # pause (ends only our dopa session; `stop` alias)
-herdr-dopa-monitor on              # resume
-herdr-dopa-monitor set poll_seconds 5
-herdr-dopa-monitor set keep_display_on true    # dopa --keep-display-on
-herdr-dopa-monitor set stop_on_lid_close true  # dopa --stop-on-lid-close
-herdr-dopa-monitor get             # all settings
-herdr-dopa-monitor logs            # tail the daemon log
-herdr-dopa-monitor notify "title" --body "text"          # herdr notification
-herdr-dopa-monitor report-metadata # push guard state to the owning herdr pane
-herdr-dopa-monitor uninstall --cleanup
+sh guard/status.sh          # dashboard (or --json, or --watch for a live view)
+sh guard/set.sh keep_display_on true    # dopa session option (applies now)
+sh guard/set.sh stop_on_lid_close true  # dopa session option (applies now)
+sh guard/stop.sh       # end the owned dopa session
 ```
 
-`status --watch [SEC]` redraws the dashboard (default interval: the configured poll); ANSI
-color only on a TTY without `NO_COLOR` and with `TERM != dumb`.
+`status.sh --watch [SEC]` redraws the dashboard (default interval: 2s).
 
 ## Behavior
 
-The monitor observes the herdr session socket (`HERDR_SOCKET_PATH`, `agent.list`) and treats
-only exact `working` statuses as active work. Entering `on` starts (or adopts) one owned
-`dopa` child; entering `off`, pausing, or daemon shutdown ends it immediately — the guard
-never signals any PID it did not start. `sync` starts/stops the session's LaunchAgent with
-the agent count.
+Each run re-observes **all** herdr sessions (every session socket under the herdr config
+root) and treats only exact `working` statuses as active work — one idle session never
+stops the single session while another session still works. Entering `on` acquires one
+owned session on the dopa-daemon control socket; entering `off` releases it — the guard
+never touches sessions it did not acquire.
 
 ```text
 off --working--> on
 on  --idle---->  off
 ```
 
-Timing is hybrid: herdr event hooks run `herdr-dopa-monitor event` the moment pane/agent
-state changes, so reactions are immediate; event payloads are informational — each iteration
-re-observes the socket as the source of truth, and malformed events just behave like `once`.
-The poll daemon (default 5s) corrects missed events, herdr restarts, and reconnects; SIGHUP
-applies config edits immediately. All state writers (daemon, `once`, event hooks) serialize
-their load → iterate → save cycle under an advisory `flock` on `<state_dir>/monitor.lock`,
-so concurrent runners never double-spawn or double-terminate the dopa child.
+Timing is purely event-driven: herdr event hooks run `guard/event.sh` the moment
+pane/agent state changes (plus one `[[startup]]` reconciliation after herdr restores the
+session). Each run re-observes the sockets as the source of truth, and malformed events
+just behave like `once`. Every run also reconciles the on-state, so a session that died
+on its own is re-acquired on the next run. All writers serialize their load → observe →
+save cycle on an atomic `mkdir` lock under `<state_dir>/lock`, so concurrent runners
+never double-acquire.
+
+The owned session is held by a background `nc` connected to the dopa-daemon control
+socket: the connection owns the session, so killing the holder releases it. The holder
+is a plain orphan process (no LaunchAgent, no daemon); a supervisor shell keeps its
+stdin open so it never sees EOF.
+
+Enable/disable is herdr's switch and the guard respects it: hooks only run while enabled
+(herdr-enforced), and manual commands never hold a session while disabled — a manual run
+then ends the owned session instead. A disabled plugin runs no code, so if a session is
+held at the exact disable moment, run the `stop` action (or `guard/stop.sh`)
+to end it; the next enable reconciles from a clean state otherwise.
+
+Accepted gap of having no poll loop: if the owned session ends silently while agents
+still work (e.g. `--stop-on-lid-close` ended it), nothing re-acquires it until the next
+event or manual command — but the next run always heals it, and the all-idle stop
+transition (the case that would leak wakefulness) is itself an event.
 
 ## Configuration
 
-Settings and runtime state live in per-session directories so concurrent herdr sessions stay
-isolated (herdr plugin directories are used automatically when provided):
+One config file, one state file for the whole machine. herdr injects the locations
+into hook runs (`HERDR_PLUGIN_CONFIG_DIR`, `HERDR_PLUGIN_STATE_DIR`); manual runs
+resolve the same herdr plugin locations from the XDG base dirs:
 
 ```text
-~/Library/Application Support/herdr-dopa-monitor/<session>/config.json  # settings
-~/Library/Application Support/herdr-dopa-monitor/<session>/state.json   # runtime
-~/Library/Application Support/herdr-dopa-monitor/<session>/monitor.lock # flock (writers)
+~/.config/herdr/plugins/config/herdr-dopa-monitor/config  # settings (KEY='value')
+~/.local/state/herdr/plugins/herdr-dopa-monitor/state     # runtime (KEY='value')
+~/.local/state/herdr/plugins/herdr-dopa-monitor/holder/   # session holder (fifo, pid)
 ```
 
-The daemon reloads config every poll and on `SIGHUP`, so `set` applies within seconds.
+(`$XDG_CONFIG_HOME` / `$XDG_STATE_HOME` respected; `HERDR_DOPA_CONFIG_DIR` /
+`HERDR_DOPA_STATE_DIR` override both for manual testing.)
+
+Every run reads the config fresh, so `set.sh` applies on the next run — and `set.sh`
+runs one iteration itself, so it applies immediately (unless the plugin is disabled, in
+which case the change is saved and applies on next enable).
 
 | Key | Default | Env override | Meaning |
 | --- | --- | --- | --- |
-| `armed` | `true` | — | `off` pauses the guard |
-| `poll_seconds` | `5` | `HERDR_DOPA_POLL_SECONDS` | seconds between observations |
-| `dopa_bin` | (provisional build path) | `DOPA_BIN` | dopa CLI to run |
-| `keep_display_on` | `false` | — | pass `--keep-display-on` |
-| `stop_on_lid_close` | `false` | — | pass `--stop-on-lid-close` |
-| `herdr_bin_path` | `None` | `HERDR_BIN_PATH` | herdr binary override |
+| `dopa_sock` | `/var/run/dopa/control.sock` | `DOPA_SOCK` | dopa-daemon control socket |
+| `keep_display_on` | `false` | — | session option `keepDisplayOn` |
+| `stop_on_lid_close` | `false` | — | session option `stopOnLidClose` |
 
-## Tests
+## For developers
 
-```sh
-swift test
-```
-
-`DopaCtlTests` spawns a stub executable (no real dopa needed) and `HerdrSocketTests` runs a
-fake herdr socket server, so the suite is hermetic. For a live end-to-end check with the
-real daemon, see `docs/manual-test.md`.
+Shell only: `sh -n guard/*.sh` syntax-checks everything. There is no unit suite by
+design (stock macOS has no test runner worth depending on); verify live with
+`docs/manual-test.md` (fake herdr socket + real dopa-daemon).
