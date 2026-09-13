@@ -6,9 +6,8 @@
     <string>__LABEL__</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__PYTHON__</string>
-        <string>__PLUGIN_ROOT__/scripts/monitor.py</string>
-        <string>--daemon</string>
+        <string>__GUARD_BIN__</string>
+        <string>daemon</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -24,8 +23,8 @@
     <dict>
         <!-- Bootstrap only: tunables live in config.json (CLI-editable) and are
              re-read by the daemon every poll. The plist pins the absolute herdr
-             path (a user LaunchAgent has a minimal PATH) and the resolved
-             per-session config/state dirs. -->
+             path (a user LaunchAgent has a minimal PATH), the guard binary,
+             and the resolved per-session config/state dirs. -->
         <key>HERDR_BIN_PATH</key>
         <string>__HERDR_BIN__</string>
         <key>HERDR_SOCKET_PATH</key>
