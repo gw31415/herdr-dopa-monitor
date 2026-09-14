@@ -2,7 +2,7 @@ id = "herdr-dopa-monitor"
 name = "dopa macOS Sleep Guard"
 version = "0.1.0"
 min_herdr_version = "0.9.0"
-description = "Event-driven sleep guard keeps macOS awake with dopa while herdr agents work. Shell only: no build, no daemon, no background process."
+description = "Event-driven sleep guard keeps macOS awake with dopa while herdr agents work. Shell only: no build, no extra daemon, no guard-wide poll loop."
 platforms = ["macos"]
 
 # Event-driven only: there is no build step and no daemon. herdr runs the

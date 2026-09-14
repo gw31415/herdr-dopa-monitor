@@ -68,3 +68,29 @@ herdr plugin enable herdr-dopa-monitor
 
 7. Clean up:
    `sh guard/stop.sh`; `rm -rf /tmp/dopa-e2e-config /tmp/dopa-e2e-state /tmp/fake-herdr.sock`.
+
+## Lid-close behavior
+
+Run this after the basic flow above, with a fake socket that reports `working`.
+
+1. Enable the plugin-side monitor and acquire while the lid is open:
+
+   ```sh
+   sh guard/set.sh stop_on_lid_close true
+   # re-run the fake-socket responder, then:
+   sh guard/once.sh
+   ```
+
+   `ioreg`/`plutil` are invoked only in this mode: once before acquisition and while the
+   owned session holder is alive. With `stop_on_lid_close=false`, neither the preflight
+   check nor the holder's lid-monitor loop may invoke them.
+
+2. Close the lid and wait briefly. The holder must close its dopa connection and the
+   owned session must disappear from `dopa-daemon status --json`. Reopening the lid must
+   not reacquire a session by itself. Re-run the Herdr event hook (or `sh guard/once.sh`)
+   after reopening; with the working response, the guard should acquire again.
+
+3. Verify the pre-acquisition fail-closed path: release the owned session, close the lid,
+   and run `once` while the fake socket still reports `working`. No new dopa session must
+   be acquired. An unreadable lid-state result is handled the same way. Reopen the lid and
+   trigger the next Herdr event to allow acquisition again.

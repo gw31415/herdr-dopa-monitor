@@ -4,7 +4,7 @@ A macOS [herdr](https://github.com/gw31415/herdr) sleep guard that keeps the mac
 with [dopa](https://github.com/gw31415/dopa) while agents work: any `working` agent makes it
 hold one owned `dopa` session, and the first all-idle observation ends it. One machine
 holds exactly one session, shared across all herdr sessions. The guard is event-driven
-shell only — no build, no daemon, nothing runs in the background. A `dopa` session lives
+shell only — no build, no extra daemon, and no guard-wide poll loop. A `dopa` session lives
 exactly as long as its holder connection, so the guard can never leak wakefulness or
 disturb your manual sessions.
 
@@ -16,7 +16,8 @@ herdr-dopa-monitor` resumes it.
 
 - macOS with the `dopa-daemon` service installed (`sudo dopa-daemon install`).
 - herdr 0.9.0+ for live observation and plugin actions.
-- Stock tools only (`sh`, `nc`, `grep`, `kill`, `launchctl`) — no toolchain, no packages.
+- Stock tools only (`sh`, `nc`, `ps`, `ln`, `grep`, `kill`, `launchctl`, `ioreg`, `plutil`) — no
+  toolchain, no packages.
 
 ## Quick install
 
@@ -51,7 +52,7 @@ herdr plugin uninstall herdr-dopa-monitor
 ```sh
 sh guard/status.sh          # dashboard (or --json, or --watch for a live view)
 sh guard/set.sh keep_display_on true    # dopa session option (applies now)
-sh guard/set.sh stop_on_lid_close true  # dopa session option (applies now)
+sh guard/set.sh stop_on_lid_close true  # plugin-side lid monitor (applies now)
 sh guard/stop.sh       # end the owned dopa session
 ```
 
@@ -83,16 +84,25 @@ socket: the connection owns the session, so killing the holder releases it. The 
 is a plain orphan process (no LaunchAgent, no daemon); a supervisor shell keeps its
 stdin open so it never sees EOF.
 
+When `stop_on_lid_close=true`, the guard reads `AppleClamshellState` with
+`/usr/sbin/ioreg` and `/usr/bin/plutil` once before acquisition and then only while its
+owned session is held. With the setting disabled, it does not invoke either tool. A
+closed lid or an unreadable lid state is fail-closed: before acquisition the guard skips
+`session.acquire`; while holding a session it closes the dopa connection, which releases
+the owned session. Reopening the lid does not reacquire it automatically; reacquisition
+waits for the next Herdr event (or an explicit manual iteration).
+
 Enable/disable is herdr's switch and the guard respects it: hooks only run while enabled
 (herdr-enforced), and manual commands never hold a session while disabled — a manual run
 then ends the owned session instead. A disabled plugin runs no code, so if a session is
 held at the exact disable moment, run the `stop` action (or `guard/stop.sh`)
 to end it; the next enable reconciles from a clean state otherwise.
 
-Accepted gap of having no poll loop: if the owned session ends silently while agents
-still work (e.g. `--stop-on-lid-close` ended it), nothing re-acquires it until the next
-event or manual command — but the next run always heals it, and the all-idle stop
-transition (the case that would leak wakefulness) is itself an event.
+There is no guard-wide lid poll loop: lid polling exists only for an active owned session
+when the setting is enabled. If that session ends because the lid closes or its state
+cannot be read while agents still work, nothing re-acquires it until the next event or
+manual command. The next run heals it when the lid is open and readable, and the all-idle
+stop transition (the case that would leak wakefulness) is itself an event.
 
 ## Configuration
 
@@ -117,7 +127,7 @@ which case the change is saved and applies on next enable).
 | --- | --- | --- | --- |
 | `dopa_sock` | `/var/run/dopa/control.sock` | `DOPA_SOCK` | dopa-daemon control socket |
 | `keep_display_on` | `false` | — | session option `keepDisplayOn` |
-| `stop_on_lid_close` | `false` | — | session option `stopOnLidClose` |
+| `stop_on_lid_close` | `false` | — | plugin-side lid monitor; when true, check before acquisition and while the owned session is held, then close it on a closed or unreadable state |
 
 ## For developers
 

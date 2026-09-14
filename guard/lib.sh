@@ -5,7 +5,7 @@
 # dopa-daemon control socket (the connection owns the session — closing it
 # releases the session, same contract as the `dopa` CLI).
 #
-# Stock macOS only: sh, nc -U, mkdir, grep/sed, kill, launchctl.
+# Stock macOS only: sh, nc -U, mkdir, ln, grep/sed, kill, launchctl, ioreg, plutil.
 
 PLUGIN_ID="herdr-dopa-monitor"
 DEFAULT_DOPA_SOCK="/var/run/dopa/control.sock"
@@ -18,6 +18,11 @@ ENV_DOPA_SOCK="${DOPA_SOCK:-}"
 # Never die on SIGPIPE (fifo writes racing a dead holder must be handled,
 # not fatal).
 trap "" PIPE
+
+# One-shot AppleClamshellState reader. Callers keep it behind the
+# STOP_ON_LID_CLOSE gate so ioreg never runs when the feature is disabled.
+# shellcheck disable=SC1091
+. "$ROOT/guard/lid.sh"
 
 # --- paths (single global config/state for the whole machine) ---
 #
@@ -375,11 +380,41 @@ dopa_session_alive() {
 # EOF when our sender fd closes (EOF would drop the connection and release
 # the session). Echoes the session id on success.
 dopa_acquire() {
+    if [ "$STOP_ON_LID_CLOSE" = "true" ]; then
+        if ! lid_state="$(dopa_lid_state)"; then
+            log "lid state unavailable; refusing to acquire"
+            return 1
+        fi
+        if [ "$lid_state" = "closed" ]; then
+            log "lid is already closed; refusing to acquire"
+            return 1
+        fi
+    fi
     hdir="$(holder_dir)"
     rm -rf "$hdir"
     mkdir -p "$hdir"
+    {
+        printf "KEEP_DISPLAY_ON=%s\n" "$(q "$KEEP_DISPLAY_ON")"
+        printf "STOP_ON_LID_CLOSE=%s\n" "$(q "$STOP_ON_LID_CLOSE")"
+    } >"$hdir/options"
+    nc_target="$(command -v nc 2>/dev/null || true)"
+    [ -n "$nc_target" ] || {
+        log "nc is unavailable; refusing to acquire"
+        rm -rf "$hdir"
+        return 1
+    }
+    holder_exec="$hdir/nc-holder-$$-$RANDOM"
+    ln -s "$nc_target" "$holder_exec" || {
+        log "cannot create owned nc link; refusing to acquire"
+        rm -rf "$hdir"
+        return 1
+    }
+    printf "%s" "$holder_exec" >"$hdir/executable"
     mkfifo "$hdir/in"
-    nohup sh "$HOLD_SCRIPT" "$hdir" "$DOPA_SOCK" &
+    # Redirect the supervisor itself so command substitutions calling this
+    # function see EOF after the session id is printed. nc has its own files.
+    nohup sh "$HOLD_SCRIPT" "$hdir" "$DOPA_SOCK" "$STOP_ON_LID_CLOSE" "$holder_exec" \
+        </dev/null >"$hdir/supervisor.out" 2>"$hdir/supervisor.err" &
     holder="$!"
     printf "%s" "$holder" > "$hdir/pid"
     # Handshake: bytes sent before the supervisor holds the fifo open are
@@ -396,7 +431,7 @@ dopa_acquire() {
     done
     if [ ! -e "$hdir/ready" ]; then
         log "holder never became ready; killing it"
-        kill "$holder" 2>/dev/null || true
+        if holder_process_alive "$holder"; then kill "$holder" 2>/dev/null || true; fi
         rm -rf "$hdir"
         return 1
     fi
@@ -405,12 +440,12 @@ dopa_acquire() {
     rid="hd-$$-$RANDOM"
     send_ok=true
     dopa_hello "hd-hello-$rid" >&3 || send_ok=false
-    printf '{"id":"hd-acquire-%s","method":"session.acquire","params":{"options":{"keepDisplayOn":%s,"stopOnLidClose":%s}}}\n' \
-        "$rid" "$KEEP_DISPLAY_ON" "$STOP_ON_LID_CLOSE" >&3 || send_ok=false
+    printf '{"id":"hd-acquire-%s","method":"session.acquire","params":{"options":{"keepDisplayOn":%s}}}\n' \
+        "$rid" "$KEEP_DISPLAY_ON" >&3 || send_ok=false
     exec 3>&-
     if [ "$send_ok" = "false" ]; then
         log "holder vanished before acquire; giving up"
-        kill "$holder" 2>/dev/null || true
+        if holder_process_alive "$holder"; then kill "$holder" 2>/dev/null || true; fi
         rm -rf "$hdir"
         return 1
     fi
@@ -418,7 +453,7 @@ dopa_acquire() {
     while [ "$waited" -lt 50 ]; do
         if grep -q '"error"' "$hdir/out" 2>/dev/null; then
             log "acquire refused: $(head -n 2 "$hdir/out" | tr '\n' ' ')"
-            kill "$holder" 2>/dev/null || true
+            if holder_process_alive "$holder"; then kill "$holder" 2>/dev/null || true; fi
             rm -rf "$hdir"
             return 1
         fi
@@ -430,7 +465,7 @@ dopa_acquire() {
                 return 0
             fi
         fi
-        if ! kill -0 "$holder" 2>/dev/null; then
+        if ! holder_process_alive "$holder"; then
             log "holder died during acquire"
             rm -rf "$hdir"
             return 1
@@ -439,9 +474,49 @@ dopa_acquire() {
         waited=$((waited + 1))
     done
     log "acquire timed out; killing holder"
-    kill "$holder" 2>/dev/null || true
+    if holder_process_alive "$holder"; then kill "$holder" 2>/dev/null || true; fi
     rm -rf "$hdir"
     return 1
+}
+
+# Verify a pid against the process start time captured before hold.sh execs nc.
+# A stale/reused pid must never be signalled.
+holder_process_alive() {
+    _holder_pid="$1"
+    case "$_holder_pid" in ''|*[!0-9]*) return 1 ;; esac
+    _holder_started_file="$(holder_dir)/started"
+    _holder_executable_file="$(holder_dir)/executable"
+    [ -f "$_holder_started_file" ] || return 1
+    [ -f "$_holder_executable_file" ] || return 1
+    _holder_expected_started="$(cat "$_holder_started_file" 2>/dev/null || true)"
+    _holder_expected_executable="$(cat "$_holder_executable_file" 2>/dev/null || true)"
+    [ -n "$_holder_expected_started" ] || return 1
+    [ -n "$_holder_expected_executable" ] || return 1
+    _holder_current_started="$(LC_ALL=C /bin/ps -p "$_holder_pid" -o lstart= 2>/dev/null)" \
+        || return 1
+    [ "$_holder_current_started" = "$_holder_expected_started" ] || return 1
+    _holder_current_command="$(LC_ALL=C /bin/ps -p "$_holder_pid" -o command= 2>/dev/null)" \
+        || return 1
+    case "$_holder_current_command" in
+        "$_holder_expected_executable"|"$_holder_expected_executable "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# True only for the non-zombie lid watcher that is still a child of holder $1.
+holder_watcher_alive() {
+    _holder_parent="$1"
+    _holder_watcher_file="$(holder_dir)/watcher.pid"
+    [ -f "$_holder_watcher_file" ] || return 1
+    _holder_watcher="$(cat "$_holder_watcher_file" 2>/dev/null || true)"
+    case "$_holder_watcher" in ''|*[!0-9]*) return 1 ;; esac
+    _holder_watcher_info="$(LC_ALL=C /bin/ps -p "$_holder_watcher" -o ppid= -o state= 2>/dev/null)" \
+        || return 1
+    set -- $_holder_watcher_info
+    [ "$#" -eq 2 ] || return 1
+    [ "$1" = "$_holder_parent" ] || return 1
+    case "$2" in Z*) return 1 ;; esac
+    return 0
 }
 
 # End the owned session: graceful release first, then kill the holder.
@@ -456,7 +531,10 @@ dopa_release() {
     else
         holder=""
     fi
-    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+    if holder_process_alive "$holder"; then
+        if holder_watcher_alive "$holder"; then
+            kill "$_holder_watcher" 2>/dev/null || true
+        fi
         if [ -n "$sid" ] && [ -p "$hdir/in" ]; then
             if exec 3<>"$hdir/in" 2>/dev/null; then
                 printf '{"id":"hd-release-%s-%s","method":"session.release","params":{"sessionId":"%s"}}\n' \
@@ -465,13 +543,17 @@ dopa_release() {
                 sleep 0.3
             fi
         fi
-        kill "$holder" 2>/dev/null || true
+        if holder_process_alive "$holder"; then
+            kill "$holder" 2>/dev/null || true
+        fi
         waited=0
-        while kill -0 "$holder" 2>/dev/null && [ "$waited" -lt 25 ]; do
+        while holder_process_alive "$holder" && [ "$waited" -lt 25 ]; do
             sleep 0.2
             waited=$((waited + 1))
         done
-        kill -KILL "$holder" 2>/dev/null || true
+        if holder_process_alive "$holder"; then
+            kill -KILL "$holder" 2>/dev/null || true
+        fi
     fi
     rm -rf "$hdir"
 }
@@ -480,7 +562,22 @@ holder_alive() {
     [ -f "$(holder_dir)/pid" ] || return 1
     pid="$(cat "$(holder_dir)/pid" 2>/dev/null || true)"
     [ -n "$pid" ] || return 1
-    kill -0 "$pid" 2>/dev/null
+    holder_process_alive "$pid"
+}
+
+# True when the live holder was acquired with the current config. This makes
+# set.sh apply both daemon and local holder options immediately by restarting
+# the one owned session on the next iteration.
+holder_matches_config() {
+    options="$(holder_dir)/options"
+    [ -f "$options" ] || return 1
+    [ "$(get_kv "$options" KEEP_DISPLAY_ON)" = "$KEEP_DISPLAY_ON" ] || return 1
+    [ "$(get_kv "$options" STOP_ON_LID_CLOSE)" = "$STOP_ON_LID_CLOSE" ] || return 1
+    _holder_config_pid="$(cat "$(holder_dir)/pid" 2>/dev/null || true)"
+    holder_process_alive "$_holder_config_pid" || return 1
+    if [ "$STOP_ON_LID_CLOSE" = "true" ]; then
+        holder_watcher_alive "$_holder_config_pid" || return 1
+    fi
 }
 
 # --- herdr UI (best-effort; skipped silently when unreachable) ---
@@ -591,8 +688,8 @@ do_iterate() {
                 LAST_ERROR="dopa acquire failure"
                 log "Transition off -> on failed; entering error state."
             fi
-        elif ! dopa_session_alive "$SESSION_ID"; then
-            log "Owned dopa session is gone while agents work; restarting it."
+        elif ! dopa_session_alive "$SESSION_ID" || ! holder_matches_config; then
+            log "Owned dopa session is gone or its options changed; restarting it."
             dopa_release
             if sid="$(dopa_acquire)"; then
                 SESSION_ID="$sid"
