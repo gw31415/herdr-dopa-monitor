@@ -12,7 +12,7 @@ jobs:
   arm64-binary:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Verify tag and plugin version
         shell: bash
@@ -63,7 +63,7 @@ jobs:
           COPYFILE_DISABLE=1 tar -czf "$artifact" -C release-stage "$product"
           shasum -a 256 "$artifact" > "$artifact.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: herdr-dopa-monitor-macos-arm64
           path: |
