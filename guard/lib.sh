@@ -8,6 +8,8 @@
 # Stock macOS only: sh, nc -U, mkdir, ln, grep/sed, kill, launchctl, cksum, ioreg, plutil.
 
 PLUGIN_ID="herdr-dopa-monitor"
+PLUGIN_VERSION="0.1.0"
+DOPA_API_VERSION=1
 DEFAULT_DOPA_SOCK="/var/run/dopa/control.sock"
 LOCK_WAIT_SECONDS=15
 
@@ -369,8 +371,28 @@ observe() {
 
 dopa_hello() {
     # $1 = request id
-    printf '{"id":"%s","method":"hello","params":{"apiVersion":1,"client":{"name":"%s","version":"0.1.0"}}}\n' \
-        "$1" "$PLUGIN_ID"
+    printf '{"id":"%s","method":"hello","params":{"apiVersion":%s,"client":{"name":"%s","version":"%s"}}}\n' \
+        "$1" "$DOPA_API_VERSION" "$PLUGIN_ID" "$PLUGIN_VERSION"
+}
+
+# The first response on every dopa connection must negotiate our wire API.
+# JSON object key order is unspecified and Swift encodes integral numbers as
+# either 1 or 1.0, so keep this deliberately narrow without assuming either.
+dopa_hello_v1_ok() {
+    line="$1"
+    printf "%s" "$line" | grep -q '"result"[[:space:]]*:' || return 1
+    printf "%s" "$line" \
+        | grep -E -q '"apiVersion"[[:space:]]*:[[:space:]]*1([.]0*)?([,}])'
+}
+
+dopa_log_bad_hello() {
+    # Bound untrusted daemon output before placing it in the plugin log.
+    summary="$(printf "%s" "$1" | cut -c 1-300)"
+    if [ -n "$summary" ]; then
+        log "dopa API handshake failed (requires API v${DOPA_API_VERSION}): $summary"
+    else
+        log "dopa API handshake failed (requires API v${DOPA_API_VERSION}): empty response"
+    fi
 }
 
 # One-shot requests over a fresh connection; prints response lines.
@@ -388,7 +410,14 @@ dopa_session_alive() {
     [ -n "$sid" ] || return 1
     resp="$(dopa_rpc "$DOPA_SOCK" "$(dopa_hello "hd-alive-$$")" \
         '{"id":"hd-status-'"$$"'","method":"status.get","params":{}}')" || return 1
-    printf "%s" "$resp" | grep -F -q "\"$sid\""
+    hello_line="$(printf "%s\n" "$resp" | sed -n '1p')"
+    if ! dopa_hello_v1_ok "$hello_line"; then
+        dopa_log_bad_hello "$hello_line"
+        return 1
+    fi
+    status_line="$(printf "%s\n" "$resp" | sed -n '2p')"
+    printf "%s" "$status_line" | grep -q '"result"[[:space:]]*:' || return 1
+    printf "%s" "$status_line" | grep -F -q "\"$sid\""
 }
 
 # Start the holder: a background nc owning one session via its connection.
@@ -468,14 +497,30 @@ dopa_acquire() {
         return 1
     fi
     waited=0
+    hello_checked=false
     while [ "$waited" -lt 50 ]; do
-        if grep -q '"error"' "$hdir/out" 2>/dev/null; then
+        hello_line="$(sed -n '1p' "$hdir/out" 2>/dev/null)"
+        if [ "$hello_checked" = "false" ] && [ -n "$hello_line" ]; then
+            if ! dopa_hello_v1_ok "$hello_line"; then
+                dopa_log_bad_hello "$hello_line"
+                if holder_process_alive "$holder"; then kill "$holder" 2>/dev/null || true; fi
+                rm -rf "$hdir"
+                return 1
+            fi
+            hello_checked=true
+        fi
+        if [ "$hello_checked" = "true" ] && sed -n '2,$p' "$hdir/out" 2>/dev/null | grep -q '"error"'; then
             log "acquire refused: $(head -n 2 "$hdir/out" | tr '\n' ' ')"
             if holder_process_alive "$holder"; then kill "$holder" 2>/dev/null || true; fi
             rm -rf "$hdir"
             return 1
         fi
-        line="$(grep -o '"sessionId"[[:space:]]*:[[:space:]]*"[^"]*"' "$hdir/out" 2>/dev/null | head -n 1)"
+        line=""
+        if [ "$hello_checked" = "true" ]; then
+            line="$(sed -n '2,$p' "$hdir/out" 2>/dev/null \
+                | grep -o '"sessionId"[[:space:]]*:[[:space:]]*"[^"]*"' \
+                | head -n 1)"
+        fi
         if [ -n "$line" ]; then
             sid="$(printf "%s" "$line" | sed -E 's/.*"([^"]+)"$/\1/')"
             if [ -n "$sid" ]; then
