@@ -10,6 +10,7 @@
 PLUGIN_ID="herdr-dopa-monitor"
 PLUGIN_VERSION="0.1.0"
 DOPA_API_VERSION=1
+DOPA_MIN_VERSION="0.3.3"
 DEFAULT_DOPA_SOCK="/var/run/dopa/control.sock"
 LOCK_WAIT_SECONDS=15
 
@@ -375,23 +376,59 @@ dopa_hello() {
         "$1" "$DOPA_API_VERSION" "$PLUGIN_ID" "$PLUGIN_VERSION"
 }
 
-# The first response on every dopa connection must negotiate our wire API.
-# JSON object key order is unspecified and Swift encodes integral numbers as
-# either 1 or 1.0, so keep this deliberately narrow without assuming either.
+# True when semantic version $1 is at least $2. Dopa release versions use
+# exactly three numeric components; prerelease or malformed values fail closed.
+dopa_version_at_least() {
+    _dopa_have="$1"
+    _dopa_need="$2"
+    case "$_dopa_have" in ''|*[!0-9.]*|.*|*.|*..*) return 1 ;; esac
+    case "$_dopa_need" in ''|*[!0-9.]*|.*|*.|*..*) return 1 ;; esac
+
+    _dopa_old_ifs="$IFS"
+    IFS=.
+    set -- $_dopa_have
+    IFS="$_dopa_old_ifs"
+    [ "$#" -eq 3 ] || return 1
+    _dopa_have_major="$1"
+    _dopa_have_minor="$2"
+    _dopa_have_patch="$3"
+
+    IFS=.
+    set -- $_dopa_need
+    IFS="$_dopa_old_ifs"
+    [ "$#" -eq 3 ] || return 1
+    _dopa_need_major="$1"
+    _dopa_need_minor="$2"
+    _dopa_need_patch="$3"
+
+    [ "$_dopa_have_major" -gt "$_dopa_need_major" ] 2>/dev/null && return 0
+    [ "$_dopa_have_major" -eq "$_dopa_need_major" ] 2>/dev/null || return 1
+    [ "$_dopa_have_minor" -gt "$_dopa_need_minor" ] 2>/dev/null && return 0
+    [ "$_dopa_have_minor" -eq "$_dopa_need_minor" ] 2>/dev/null || return 1
+    [ "$_dopa_have_patch" -ge "$_dopa_need_patch" ] 2>/dev/null
+}
+
+# The first response on every dopa connection must negotiate our wire API and
+# meet the minimum daemon release. JSON object key order is unspecified and
+# Swift encodes integral numbers as either 1 or 1.0.
 dopa_hello_v1_ok() {
     line="$1"
     printf "%s" "$line" | grep -q '"result"[[:space:]]*:' || return 1
     printf "%s" "$line" \
-        | grep -E -q '"apiVersion"[[:space:]]*:[[:space:]]*1([.]0*)?([,}])'
+        | grep -E -q '"apiVersion"[[:space:]]*:[[:space:]]*1([.]0*)?([,}])' \
+        || return 1
+    daemon_version="$(printf "%s" "$line" \
+        | sed -n 's/.*"daemonVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    dopa_version_at_least "$daemon_version" "$DOPA_MIN_VERSION"
 }
 
 dopa_log_bad_hello() {
     # Bound untrusted daemon output before placing it in the plugin log.
     summary="$(printf "%s" "$1" | cut -c 1-300)"
     if [ -n "$summary" ]; then
-        log "dopa API handshake failed (requires API v${DOPA_API_VERSION}): $summary"
+        log "dopa API handshake failed (requires Dopa >=$DOPA_MIN_VERSION, API v$DOPA_API_VERSION): $summary"
     else
-        log "dopa API handshake failed (requires API v${DOPA_API_VERSION}): empty response"
+        log "dopa API handshake failed (requires Dopa >=$DOPA_MIN_VERSION, API v$DOPA_API_VERSION): empty response"
     fi
 }
 

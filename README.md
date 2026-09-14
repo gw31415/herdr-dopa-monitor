@@ -20,7 +20,7 @@ Herdrのエージェントが作業している間だけ、Macが自動でスリ
 | 必要なもの | 内容 |
 | --- | --- |
 | Dopa | システムにインストールされ、`dopa-daemon` が起動していること |
-| Dopa互換性 | Dopa 0.3.2で確認済み。公開control socket API v1を使用 |
+| Dopa互換性 | Dopa 0.3.3以降。公開control socket API v1を使用 |
 | Herdr | 0.9.0以降 |
 | OS | Apple Silicon搭載Mac。推奨のHomebrew CaskはmacOS 26以降 |
 
@@ -136,7 +136,8 @@ herdr plugin enable herdr-dopa-monitor
 ## 🔒 安全性について
 
 - プラグインはDopaの公開control socket API v1を使用します。
-- 接続時にAPIバージョンを確認し、互換性がない場合はセッションを有効扱いにしません。
+- 接続時にDopa 0.3.3以降かつAPI v1であることを確認し、互換性がない場合は
+  セッションを有効扱いにしません。
 - Dopaとの接続が閉じると、その接続が所有するセッションもDopa側で解放されます。
 - 手動で開始したDopaや、ほかのアプリが開始したセッションには触れません。
 - Herdrへ接続できない場合は「作業中」と推測せず、セッションを終了する側に倒します。
@@ -208,6 +209,20 @@ dopa-daemon status
 プラグインが無効なら `herdr plugin enable herdr-dopa-monitor` で再開します。
 APIの互換性エラーや取得失敗はHerdrのプラグインコマンドログに記録されます。
 問題を直した後は、次のHerdrイベントを待つか `sh guard/once.sh` で再試行できます。
+
+### Dopaのバージョン互換性エラーが表示される
+
+Dopa 0.3.3以降へ更新し、システムで動くデーモンも入れ直します。
+
+```sh
+brew upgrade --cask gw31415/tap/dopa
+sudo dopa-daemon install
+dopa-daemon status
+```
+
+Homebrewでアプリだけを更新した場合、すでにインストールされている特権デーモンは
+自動で置き換わりません。`dopa-daemon install` をもう一度実行すると、設定済みの
+ユーザーを維持したままデーモンが更新されます。
 
 ### セッションを手動で終了したい
 

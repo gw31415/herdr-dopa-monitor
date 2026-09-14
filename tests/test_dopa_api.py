@@ -71,7 +71,7 @@ class FakeDopaServer:
                 self._fail("hello client name was %r" % client.get("name"))
             self._send(
                 request,
-                result={"apiVersion": 1, "daemonVersion": "fake-dopa-0.0.0"},
+                result={"apiVersion": 1, "daemonVersion": "0.3.3"},
             )
             return
 
@@ -187,15 +187,22 @@ class DopaApiContractTest(unittest.TestCase):
         self.assertEqual(request["params"]["client"]["name"], "herdr-dopa-monitor")
         self.assertEqual(request["params"]["client"]["version"], "0.1.0")
 
-    def test_hello_validator_rejects_incompatible_or_error_responses(self):
+    def test_hello_validator_enforces_api_and_minimum_version(self):
         result = self.run_shell(
             r'''
 set -eu
 ROOT="$1"
 . "$ROOT/guard/lib.sh"
-dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1}}'
-dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1.0}}'
-! dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":2}}'
+dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"0.3.3"}}'
+dopa_hello_v1_ok '{"id":"hello","result":{"daemonVersion":"0.3.4","apiVersion":1.0}}'
+dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"0.4.0"}}'
+dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"0.10.0"}}'
+dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"1.0.0"}}'
+! dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"0.3.2"}}'
+! dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"0.2.99"}}'
+! dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":2,"daemonVersion":"0.3.3"}}'
+! dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1}}'
+! dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"0.3.3-beta"}}'
 ! dopa_hello_v1_ok '{"id":"hello","error":{"code":"unsupported_version"}}'
 ! dopa_hello_v1_ok ''
 ''',

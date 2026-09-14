@@ -1,6 +1,7 @@
 # Manual end-to-end test (real dopa-daemon, fake herdr)
 
-Requires system Dopa installed (`brew install --cask gw31415/tap/dopa`), its
+Requires system Dopa 0.3.3 or later installed
+(`brew install --cask gw31415/tap/dopa`), its
 `dopa-daemon` service running (set it up in the app or run `sudo dopa-daemon install`),
 and this checkout linked with `herdr plugin link .`.
 The fake herdr socket below only feeds canned agent lists to the guard —
