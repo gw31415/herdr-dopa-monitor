@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  arm64-binary:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag and plugin version
+        shell: bash
+        run: |
+          set -euo pipefail
+          plugin_version=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' herdr-plugin.toml | sed -n '1p')
+          test -n "$plugin_version"
+          test "$GITHUB_REF_NAME" = "v$plugin_version"
+
+      - name: Check packaging script syntax
+        run: sh -n scripts/*.sh
+
+      - name: Test
+        run: |
+          swift test
+          scripts/build.sh
+          python3 tests/test_dopa_api.py
+
+      - name: Build macOS 13 arm64 binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          product=herdr-dopa-monitor
+
+          swift build --configuration release --product "$product" \
+            --triple arm64-apple-macosx13.0 \
+            --scratch-path .build/arm64
+
+          arm64_bin_dir=$(swift build --configuration release --show-bin-path \
+            --triple arm64-apple-macosx13.0 \
+            --scratch-path .build/arm64)
+
+          mkdir -p release-stage
+          install -m 755 "$arm64_bin_dir/$product" release-stage/"$product"
+          chmod 755 release-stage/"$product"
+          codesign --force --sign - --timestamp=none release-stage/"$product"
+
+          test "$(lipo -archs release-stage/"$product")" = arm64
+          xcrun vtool -show-build release-stage/"$product" | grep -Eq 'minos[[:space:]]+13\.0'
+
+      - name: Package and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          product=herdr-dopa-monitor
+          artifact="$product-macos-arm64.tar.gz"
+
+          COPYFILE_DISABLE=1 tar -czf "$artifact" -C release-stage "$product"
+          shasum -a 256 "$artifact" > "$artifact.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herdr-dopa-monitor-macos-arm64
+          path: |
+            herdr-dopa-monitor-macos-arm64.tar.gz
+            herdr-dopa-monitor-macos-arm64.tar.gz.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            herdr-dopa-monitor-macos-arm64.tar.gz
+            herdr-dopa-monitor-macos-arm64.tar.gz.sha256
+          )
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+              --verify-tag \
+              --generate-notes \
+              --title "$GITHUB_REF_NAME"
+          fi

@@ -1,263 +1,168 @@
-# dopa macOS Sleep Guard for herdr
+# dopa macOS Sleep Guard for Herdr
 
-Herdrのエージェントが作業している間だけ、Macが自動でスリープしないようにする
-[Dopa](https://github.com/gw31415/dopa)連携プラグインです。
+Herdr のエージェントが作業している間だけ、Mac の自動スリープを防ぐ
+[Dopa](https://github.com/gw31415/dopa) 連携プラグインです。
 
-作業中のエージェントが1つでもあればDopaのセッションを開始し、すべてのエージェントが
-待機状態になると自動で終了します。一度設定すれば、普段は操作する必要がありません。
+作業中のエージェントが 1 つでもあれば Dopa セッションを開始し、すべての
+エージェントが待機状態になると自動で終了します。実行部分は Swift 製の単一
+バイナリです。通常のインストールでは arm64 のビルド済みバイナリを取得するため、
+Swift toolchain は必要ありません。
 
-## 🌟 主な機能
+## 主な機能
 
-- **作業中だけスリープを防止**: `working` 状態のエージェントを検出して自動で開始・終了
-- **すべてのHerdrセッションを監視**: 別のワークスペースで作業中のエージェントも見逃しません
-- **Dopaのセッションを安全に分離**: このプラグインが開始したセッションだけを終了します
-- **イベント駆動で軽量**: 常駐監視ループや追加デーモン、ビルド作業はありません
-- **ディスプレイと蓋の設定に対応**: 画面消灯の防止や、蓋を閉じたときの自動停止を選べます
-- **無効化・削除時も自動停止**: プラグインを止める前に手動で後片付けする必要はありません
+- `working` のエージェントがいる間だけスリープを防止
+- すべての Herdr セッションをまとめて監視
+- このプラグインが取得した Dopa セッションだけを解放
+- イベント駆動。常駐ポーリングデーモンはなし
+- 画面消灯の防止と、蓋を閉じたときの自動停止に対応
+- plugin disable / unlink / uninstall を検出して接続を自動解放
+- Foundation、Darwin、IOKit によるネイティブ実装（実行時の `sh` / `nc` / `ioreg` は不要）
 
-## ✅ 動作環境
+## 動作環境
 
 | 必要なもの | 内容 |
 | --- | --- |
-| Dopa | システムにインストールされ、`dopa-daemon` が起動していること |
-| Dopa互換性 | Dopa 0.3.3以降。公開control socket API v1を使用 |
-| Herdr | 0.9.0以降 |
-| OS | Apple Silicon搭載Mac。推奨のHomebrew CaskはmacOS 26以降 |
+| OS | macOS 13 以降、Apple Silicon（arm64） |
+| Dopa | 0.3.3 以降。`dopa-daemon` が起動していること |
+| Herdr | 0.9.0 以降 |
 
-実行時に使うのはmacOS標準のコマンドだけです。追加の言語ランタイムやパッケージは
-必要ありません。
+## インストール
 
-## 📦 インストール
-
-### 1. Dopaをインストールする
-
-Homebrewを使う場合:
+まず Dopa をセットアップします。
 
 ```sh
 brew install --cask gw31415/tap/dopa
-```
-
-Dopaを一度開き、案内に従ってスリープ管理サービスを設定します。ターミナルから
-設定する場合は、次のコマンドを実行します。
-
-```sh
 sudo dopa-daemon install
 dopa-daemon status
 ```
 
-`dopa-daemon status` でサービスの状態が表示されれば準備完了です。macOSに
-起動を止められた場合は、[Dopaのインストール案内](https://github.com/gw31415/dopa#-インストール)
-に従って初回起動を許可してください。
-
-### 2. Herdrプラグインをインストールする
+次にプラグインをインストールします。
 
 ```sh
 herdr plugin install gw31415/herdr-dopa-monitor
 ```
 
-これで設定は完了です。次にエージェントの状態が変化したときから、自動で監視が始まります。
+Herdr は `herdr-plugin.toml` の `[[build]]` を実行し、同じバージョンの GitHub
+Release から arm64 バイナリと SHA-256 checksum を取得します。download が
+できずローカルに Swift がある場合だけ、source build へフォールバックします。
+checksum 不一致や不正な archive は受け入れません。
 
-### 開発中のチェックアウトを使う場合
-
-```sh
-git clone https://github.com/gw31415/herdr-dopa-monitor.git
-cd herdr-dopa-monitor
-herdr plugin link .
-```
-
-## 🚀 使い方
+## 使い方
 
 通常は自動で動作します。
 
 ```text
-エージェントが作業開始   → Dopaセッションを開始
-全エージェントが待機     → Dopaセッションを終了
+エージェントが作業開始  → Dopa セッションを開始
+全エージェントが待機    → Dopa セッションを終了
 ```
 
-状態確認や設定変更には、リポジトリ内のコマンドを使用できます。
+Herdr の action から状態確認と一時停止ができます。
 
 ```sh
-# 現在の状態を表示
-sh guard/status.sh
-
-# JSONで表示
-sh guard/status.sh --json
-
-# 2秒ごとに更新
-sh guard/status.sh --watch
-
-# 画面の自動消灯も防ぐ
-sh guard/set.sh keep_display_on true
-
-# MacBookの蓋を閉じたら停止する
-sh guard/set.sh stop_on_lid_close true
-
-# このプラグインが保持しているDopaセッションをいったん終了
-sh guard/stop.sh
+herdr plugin action invoke status --plugin herdr-dopa-monitor
+herdr plugin action invoke stop --plugin herdr-dopa-monitor
 ```
 
-設定はコマンド実行時に保存されます。セッションの保持中なら、必要に応じて再起動して
-新しい設定をすぐに反映します。待機中なら、次にセッションを開始するときに使われます。
+開発 checkout ではバイナリを直接呼び出せます。
 
-`guard/stop.sh` は一時的にセッションを終了するコマンドです。エージェントが
-`working` のまま次のイベントが届くと再開します。継続して止めたい場合は、
-次の「一時停止と再開」の手順でプラグインを無効にしてください。
+```sh
+./bin/herdr-dopa-monitor status
+./bin/herdr-dopa-monitor status --json
+./bin/herdr-dopa-monitor set keep_display_on true
+./bin/herdr-dopa-monitor set stop_on_lid_close true
+./bin/herdr-dopa-monitor stop
+```
 
-## ⏸ 一時停止と再開
-
-一時停止:
+`stop` は一時的に owned session を終了します。エージェントが `working` のまま
+次のイベントが届くと再開します。継続して止める場合は plugin を無効にします。
 
 ```sh
 herdr plugin disable herdr-dopa-monitor
-```
-
-再開:
-
-```sh
 herdr plugin enable herdr-dopa-monitor
 ```
 
-無効化すると、プラグインが保持中のDopaセッションも自動で終了します。再び有効にした時点で
-エージェントがすでに作業中の場合は、次の状態変化か `sh guard/once.sh` の実行後に
-セッションを開始します。
+保持中の内部プロセスは Herdr の plugin registry の親ディレクトリをファイルシステム
+イベントで監視しているため、disable、unlink、uninstall のいずれでも Dopa 接続を
+閉じます。一定間隔での再読は行いません。
 
-## ⚙️ 設定
+## 設定
 
 | 設定 | 初期値 | 内容 |
 | --- | --- | --- |
-| `keep_display_on` | `false` | `true` にすると、作業中は画面の自動消灯も防ぎます |
-| `stop_on_lid_close` | `false` | `true` にすると、MacBookの蓋を閉じた時点でセッションを終了します |
-| `dopa_sock` | `/var/run/dopa/control.sock` | Dopaのcontrol socket。通常は変更不要です |
+| `keep_display_on` | `false` | 作業中は画面の自動消灯も防ぐ |
+| `stop_on_lid_close` | `false` | MacBook の蓋が閉じたら owned session を終了 |
+| `dopa_sock` | `/var/run/dopa/control.sock` | Dopa control socket |
 
-`stop_on_lid_close=true` の場合、セッション開始前と保持中に蓋の状態を確認します。
-蓋の状態を安全に確認できない場合も、スリープ防止を残さないよう停止側に倒します。
-蓋を再び開いた後は、次のHerdrイベントで必要に応じて再開します。
-
-## 🔒 安全性について
-
-- プラグインはDopaの公開control socket API v1を使用します。
-- 接続時にDopa 0.3.3以降かつAPI v1であることを確認し、互換性がない場合は
-  セッションを有効扱いにしません。
-- Dopaとの接続が閉じると、その接続が所有するセッションもDopa側で解放されます。
-- 手動で開始したDopaや、ほかのアプリが開始したセッションには触れません。
-- Herdrへ接続できない場合は「作業中」と推測せず、セッションを終了する側に倒します。
-- プラグインの無効化、リンク解除、アンインストールも保持中に検出して自動停止します。
-
-> [!WARNING]
-> `stop_on_lid_close` が `false` の間は、蓋を閉じてもMacが動作を続けます。
-> MacBookをバッグへ入れる前に、Herdrの作業とDopaセッションが終了していることを
-> 確認してください。このプラグインには、バッテリー残量の低下による独自の自動停止機能は
-> ありません。
-
-## 🧭 仕組み
-
-Herdrのpane・agent状態が変わるたびに、プラグインが1回だけ状態を確認します。
-すべてのHerdrセッションをまとめて調べ、`working` のエージェントが1つ以上あれば
-1つのDopaセッションを保持します。
+保存先は Herdr の plugin 用ディレクトリです。
 
 ```text
-off ── workingを検出 ──▶ on
-on  ── 全員が待機   ──▶ off
-```
-
-Dopaセッションは、バックグラウンドの `nc` がcontrol socketへの接続を保持することで
-所有します。API v1のhelloが成功した後だけ取得結果を受け入れ、接続を閉じることで
-セッションを解放します。
-
-状態更新処理はロックで直列化されるため、複数のイベントが同時に届いても
-セッションを重複して開始しません。保持中のセッションがDopaの再起動などで消えた場合は、
-次のHerdrイベントで自動復旧します。
-
-## 🗂 保存場所
-
-設定と実行状態は、Herdrのプラグイン用ディレクトリに保存されます。
-
-```text
-~/.config/herdr/plugins/config/herdr-dopa-monitor/config
-~/.local/state/herdr/plugins/herdr-dopa-monitor/state
+~/.config/herdr/plugins/config/herdr-dopa-monitor/config.json
+~/.local/state/herdr/plugins/herdr-dopa-monitor/state.json
 ~/.local/state/herdr/plugins/herdr-dopa-monitor/holder/
 ```
 
-`XDG_CONFIG_HOME` と `XDG_STATE_HOME` にも対応しています。テスト時は
-`HERDR_DOPA_CONFIG_DIR` と `HERDR_DOPA_STATE_DIR` で保存先を変更できます。
+`XDG_CONFIG_HOME` / `XDG_STATE_HOME` に対応しています。テストでは
+`HERDR_DOPA_CONFIG_DIR` / `HERDR_DOPA_STATE_DIR` で上書きできます。
 
-## 🧰 トラブルシューティング
+0.1.x の `config` / `state`（`KEY='value'` 形式）は初回実行時に読み取られ、次の
+保存から JSON になります。旧 `nc` holder が残っている場合は、PID だけでなく旧版が
+作成した専用 executable path も照合してから終了します。
 
-### 「dopa socket MISSING」と表示される
+## 仕組みと安全性
 
-Dopaのサービスが動いているか確認します。
+Herdr の pane / agent 状態イベントごとに Swift バイナリが一回だけ状態を整合させます。
+全 Herdr session socket の `agent.list` を集約し、状態更新は `flock` で直列化します。
 
-```sh
-dopa-daemon status
+```text
+off ── working を検出 ──▶ on
+on  ── 全員が待機 ─────▶ off
 ```
 
-停止している場合:
+`on` の間だけ、同じバイナリの非公開 `hold` サブコマンドがバックグラウンドで動きます。
+これは追加デーモンではなく、Dopa の control socket 接続を所有する小さなプロセスです。
+接続終了時に Dopa 側がその接続の session を解放するため、手動で開始した Dopa や
+ほかのアプリの session には触れません。
+
+Dopa 接続では公開 API v1 の hello を検証し、Dopa 0.3.3 未満、互換性のない API、
+error response を拒否します。Herdr に接続できない場合は作業中と推測せず、停止側へ
+倒します。`stop_on_lid_close=true` では `IOPMrootDomain` の IOKit interest
+notification を受け、通知時だけ蓋状態を読み直します。Dopa の切断は socket read
+source で受けます。いずれにもポーリングタイマーはなく、蓋状態を取得できない場合は
+fail closed で停止します。
+
+> [!WARNING]
+> `stop_on_lid_close=false` の間は蓋を閉じても Mac が動作を続けます。MacBook を
+> バッグへ入れる前に、Herdr の作業と Dopa session が終了していることを確認してください。
+
+## 開発
+
+`plugin link` は Herdr の `[[build]]` を実行しないため、先にローカルバイナリを作ります。
 
 ```sh
-sudo dopa-daemon start
+scripts/build.sh
+herdr plugin link .
 ```
 
-### エージェントが作業中なのに開始されない
-
-まず詳細状態を確認します。
+テスト:
 
 ```sh
-sh guard/status.sh
-dopa-daemon status
+swift test
+scripts/build.sh
+python3 tests/test_dopa_api.py
 ```
 
-プラグインが無効なら `herdr plugin enable herdr-dopa-monitor` で再開します。
-APIの互換性エラーや取得失敗はHerdrのプラグインコマンドログに記録されます。
-問題を直した後は、次のHerdrイベントを待つか `sh guard/once.sh` で再試行できます。
+タグ `v<herdr-plugin.toml の version>` を push すると release workflow が macOS 13
+deployment target の arm64 バイナリをビルドし、ad-hoc 署名した archive と checksum を
+GitHub Release へ公開します。
 
-### Dopaのバージョン互換性エラーが表示される
+リリース前に同梱物をローカルで作るだけなら `scripts/build.sh`、release asset の
+install 動作を試す場合は `scripts/install-prebuilt.sh` を使います。生成される `bin/` は
+Git 管理せず、Herdr の managed checkout 内で install 時に作成されます。
 
-Dopa 0.3.3以降へ更新し、システムで動くデーモンも入れ直します。
-
-```sh
-brew upgrade --cask gw31415/tap/dopa
-sudo dopa-daemon install
-dopa-daemon status
-```
-
-Homebrewでアプリだけを更新した場合、すでにインストールされている特権デーモンは
-自動で置き換わりません。`dopa-daemon install` をもう一度実行すると、設定済みの
-ユーザーを維持したままデーモンが更新されます。
-
-### セッションを手動で終了したい
-
-```sh
-sh guard/stop.sh
-```
-
-この操作も、このプラグインが所有するセッションだけを対象にします。
-継続して停止する場合は `herdr plugin disable herdr-dopa-monitor` を使用してください。
-
-## 🗑 アンインストール
+## アンインストール
 
 ```sh
 herdr plugin uninstall herdr-dopa-monitor
 ```
 
-保持中のセッションは自動で終了するため、事前に `guard/stop.sh` を実行する必要は
-ありません。Dopa本体はほかの用途でも利用できるため、そのまま残ります。
-
-## 🧪 開発者向け
-
-シェルの構文とraw API v1の契約テストを実行します。
-
-```sh
-sh -n guard/*.sh
-python3 tests/test_dopa_api.py
-```
-
-契約テストは一時的なUnix socketを作り、次の動作を実環境へ影響させず確認します。
-
-- API v1のhello
-- 非互換APIとerror応答の拒否
-- セッションの取得と明示的な解放
-- holder終了時の接続切断
-
-実際のDopaデーモンと組み合わせた確認手順は
-[`docs/manual-test.md`](docs/manual-test.md)を参照してください。CIもmacOS上で同じ
-構文検査と契約テストを実行します。
+保持中の接続は plugin registry から entry が消えたことを検出して自動で閉じます。

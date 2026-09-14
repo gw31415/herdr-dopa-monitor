@@ -5,11 +5,19 @@ on:
   pull_request:
 
 jobs:
-  shell-and-dopa-api:
-    runs-on: macos-latest
+  swift:
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Check shell syntax
-        run: sh -n guard/*.sh
-      - name: Run dopa API contract test
+      - name: Check packaging script syntax
+        run: sh -n scripts/*.sh
+      - name: Run Swift tests
+        run: swift test
+      - name: Build the local release binary
+        run: scripts/build.sh
+      - name: Run native dopa API contract test
         run: python3 tests/test_dopa_api.py
+      - name: Verify the binary
+        run: |
+          test -x bin/herdr-dopa-monitor
+          bin/herdr-dopa-monitor --version

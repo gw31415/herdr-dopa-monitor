@@ -1,64 +1,60 @@
 id = "herdr-dopa-monitor"
 name = "dopa macOS Sleep Guard"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.9.0"
-description = "Event-driven sleep guard keeps macOS awake with dopa while herdr agents work. Shell only: no build, no extra daemon, no guard-wide poll loop."
+description = "Native Swift sleep guard keeps macOS awake with dopa while herdr agents work. Event-driven, with a prebuilt arm64 binary."
 platforms = ["macos"]
 
-# Event-driven only: there is no build step and no daemon. herdr runs the
-# hooks below the moment pane/agent state changes; `guard/event.sh`
-# performs exactly one state-locked monitor iteration and exits. The single
-# owned dopa session is held directly on the dopa-daemon control socket by
-# a background `nc` (closing it releases the session). Commands run with
-# the plugin directory as cwd.
+# GitHub installs download the matching signed/checksummed arm64 binary.
+# A local Swift build is only a fallback when a release asset is unavailable.
+# `plugin link` intentionally skips [[build]]; developers run scripts/build.sh.
+[[build]]
+platforms = ["macos"]
+command = ["sh", "scripts/install-prebuilt.sh"]
+
+# Hooks remain one-shot and event-driven. Only the internal `hold` subprocess
+# persists, owning the dopa socket connection and exiting when the plugin is
+# disabled/unlinked, the lid closes (when configured), or dopa disconnects.
 
 # Reconcile once after herdr restores the session. Tolerates
 # unknown/missing/malformed event payloads by behaving like `once`.
 [[startup]]
 platforms = ["macos"]
-command = ["sh", "guard/event.sh"]
+command = ["./bin/herdr-dopa-monitor", "event"]
 
 [[events]]
 on = "pane.agent_status_changed"
 platforms = ["macos"]
-command = ["sh", "guard/event.sh"]
+command = ["./bin/herdr-dopa-monitor", "event"]
 
 [[events]]
 on = "pane.agent_detected"
 platforms = ["macos"]
-command = ["sh", "guard/event.sh"]
+command = ["./bin/herdr-dopa-monitor", "event"]
 
 [[events]]
 on = "pane.created"
 platforms = ["macos"]
-command = ["sh", "guard/event.sh"]
+command = ["./bin/herdr-dopa-monitor", "event"]
 
 [[events]]
 on = "pane.closed"
 platforms = ["macos"]
-command = ["sh", "guard/event.sh"]
+command = ["./bin/herdr-dopa-monitor", "event"]
 
 [[events]]
 on = "pane.exited"
 platforms = ["macos"]
-command = ["sh", "guard/event.sh"]
+command = ["./bin/herdr-dopa-monitor", "event"]
 
 [[actions]]
 id = "status"
 title = "Print dopa monitor status"
 contexts = ["workspace"]
-command = ["sh", "guard/status.sh"]
+command = ["./bin/herdr-dopa-monitor", "status"]
 
 [[actions]]
 id = "stop"
 title = "Stop the owned dopa session and reset the guard"
 contexts = ["workspace"]
-command = ["sh", "guard/stop.sh"]
-
-# Non-interactive status rendered inside a herdr pane: plain text refreshed
-# every 2s (--watch), with ANSI color when the pane is a TTY.
-[[panes]]
-id = "status"
-title = "dopa Sleep Guard"
-placement = "overlay"
-command = ["sh", "guard/status.sh", "--watch"]
+command = ["./bin/herdr-dopa-monitor", "stop"]

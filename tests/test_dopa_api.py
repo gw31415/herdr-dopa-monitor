@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the raw dopa API v1 boundary with a fake Unix socket."""
+"""End-to-end contract tests for the native Swift guard and dopa API v1."""
 
 import json
 import os
@@ -8,271 +8,359 @@ import socket
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class FakeDopaServer:
-    """Small, dependency-free dopa control socket used by the contract test."""
-
+class JsonLineServer:
     def __init__(self, path):
         self.path = str(path)
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(self.path)
-        self.listener.listen(1)
-        self.listener.settimeout(0.2)
-        self.stop = threading.Event()
-        self.connected = threading.Event()
-        self.disconnected = threading.Event()
-        self.release_seen = threading.Event()
-        self.requests = []
+        self.listener.listen(8)
+        self.listener.settimeout(0.1)
+        self.stop_event = threading.Event()
         self.failures = []
-        self.connection = None
-        self.thread = threading.Thread(target=self._serve, name="fake-dopa", daemon=True)
+        self.clients = []
+        self.thread = threading.Thread(target=self._accept, daemon=True)
         self.thread.start()
 
-    def _fail(self, message):
-        self.failures.append(message)
-
-    def _send(self, request, result=None, error=None):
-        if self.connection is None:
-            return
-        response = {"id": request.get("id")}
-        if error is not None:
-            response["error"] = error
-        else:
-            response["result"] = result if result is not None else {}
-        try:
-            self.connection.sendall(
-                (json.dumps(response, separators=(",", ":")) + "\n").encode("utf-8")
-            )
-        except OSError as exc:
-            if not self.stop.is_set():
-                self._fail("failed to send response: %s" % exc)
-
-    def _handle(self, request):
-        self.requests.append(request)
-        method = request.get("method")
-        params = request.get("params")
-        if not isinstance(params, dict):
-            self._fail("%s did not contain an object params value" % method)
-            self._send(request, error={"code": "invalid_params"})
-            return
-
-        if method == "hello":
-            if params.get("apiVersion") != 1:
-                self._fail("hello apiVersion was %r, expected 1" % params.get("apiVersion"))
-            client = params.get("client")
-            if not isinstance(client, dict):
-                self._fail("hello client was not an object")
-            elif client.get("name") != "herdr-dopa-monitor":
-                self._fail("hello client name was %r" % client.get("name"))
-            self._send(
-                request,
-                result={"apiVersion": 1, "daemonVersion": "0.3.3"},
-            )
-            return
-
-        if method == "session.acquire":
-            options = params.get("options")
-            if not isinstance(options, dict):
-                self._fail("session.acquire did not contain an options object")
-            self._send(request, result={"sessionId": "fake-session"})
-            return
-
-        if method == "session.release":
-            if params.get("sessionId") != "fake-session":
-                self._fail("session.release sessionId was %r" % params.get("sessionId"))
-            self.release_seen.set()
-            self._send(request, result={})
-            return
-
-        self._fail("unexpected dopa method: %r" % method)
-        self._send(request, error={"code": "method_not_found"})
-
-    def _serve(self):
-        conn = None
-        try:
-            while not self.stop.is_set():
-                try:
-                    conn, _ = self.listener.accept()
-                    break
-                except socket.timeout:
-                    continue
-                except OSError:
-                    return
-            if conn is None:
+    def _accept(self):
+        while not self.stop_event.is_set():
+            try:
+                connection, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
                 return
-            self.connection = conn
-            self.connection.settimeout(0.2)
-            self.connected.set()
-            buffer = b""
-            while not self.stop.is_set():
-                try:
-                    data = self.connection.recv(4096)
-                except socket.timeout:
-                    continue
-                except OSError as exc:
-                    if not self.stop.is_set():
-                        self._fail("socket receive failed: %s" % exc)
-                    break
-                if not data:
-                    self.disconnected.set()
-                    break
-                buffer += data
-                while b"\n" in buffer:
-                    raw, buffer = buffer.split(b"\n", 1)
-                    if not raw.strip():
-                        continue
-                    try:
-                        request = json.loads(raw.decode("utf-8"))
-                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                        self._fail("invalid JSON request: %s" % exc)
-                        continue
-                    self._handle(request)
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except OSError:
-                    pass
-            self.connection = None
-            self.disconnected.set()
+            thread = threading.Thread(target=self.serve_client, args=(connection,), daemon=True)
+            self.clients.append((connection, thread))
+            thread.start()
+
+    def serve_client(self, connection):
+        raise NotImplementedError
+
+    def send(self, connection, request, result=None, error=None):
+        response = {"id": request.get("id")}
+        if error is None:
+            response["result"] = result if result is not None else {}
+        else:
+            response["error"] = error
+        connection.sendall((json.dumps(response, separators=(",", ":")) + "\n").encode())
+
+    @staticmethod
+    def requests(connection):
+        buffer = b""
+        while True:
+            data = connection.recv(65536)
+            if not data:
+                return
+            buffer += data
+            while b"\n" in buffer:
+                raw, buffer = buffer.split(b"\n", 1)
+                if raw.strip():
+                    yield json.loads(raw)
 
     def close(self):
-        self.stop.set()
-        if self.connection is not None:
-            try:
-                self.connection.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            try:
-                self.connection.close()
-            except OSError:
-                pass
+        self.stop_event.set()
         try:
             self.listener.close()
         except OSError:
             pass
+        for connection, _ in self.clients:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                connection.close()
+            except OSError:
+                pass
         self.thread.join(timeout=2)
+        for _, thread in self.clients:
+            thread.join(timeout=2)
+
+
+class FakeHerdrServer(JsonLineServer):
+    def __init__(self, path):
+        self.working = True
+        super().__init__(path)
+
+    def serve_client(self, connection):
         try:
-            os.unlink(self.path)
-        except FileNotFoundError:
-            pass
+            for request in self.requests(connection):
+                if request.get("method") != "agent.list":
+                    self.send(connection, request, error={"code": "method_not_found"})
+                    continue
+                agents = [{"agent_status": "working"}] if self.working else []
+                self.send(connection, request, result={"agents": agents})
+        except (OSError, ValueError) as error:
+            if not self.stop_event.is_set():
+                self.failures.append(str(error))
+        finally:
+            try:
+                connection.close()
+            except OSError:
+                pass
 
 
-class DopaApiContractTest(unittest.TestCase):
-    def run_shell(self, script, env, timeout=15):
+class FakeDopaServer(JsonLineServer):
+    def __init__(self, path, daemon_version="0.3.3"):
+        self.daemon_version = daemon_version
+        self.acquired = threading.Event()
+        self.disconnected = threading.Event()
+        self.lock = threading.Lock()
+        self.sessions = set()
+        self.owned_connections = set()
+        self.options = []
+        self.acquire_count = 0
+        super().__init__(path)
+
+    def serve_client(self, connection):
+        owned = set()
+        try:
+            for request in self.requests(connection):
+                method = request.get("method")
+                params = request.get("params")
+                if not isinstance(params, dict):
+                    self.send(connection, request, error={"code": "invalid_params"})
+                elif method == "hello":
+                    client = params.get("client", {})
+                    if params.get("apiVersion") != 1 or client.get("name") != "herdr-dopa-monitor":
+                        self.failures.append("invalid hello: %r" % request)
+                    self.send(
+                        connection,
+                        request,
+                        result={"apiVersion": 1, "daemonVersion": self.daemon_version},
+                    )
+                elif method == "session.acquire":
+                    session = "fake-session"
+                    with self.lock:
+                        self.sessions.add(session)
+                        self.owned_connections.add(connection)
+                        self.options.append(params.get("options"))
+                        self.acquire_count += 1
+                    owned.add(session)
+                    self.send(connection, request, result={"sessionId": session})
+                    self.acquired.set()
+                elif method == "session.release":
+                    session = params.get("sessionId")
+                    with self.lock:
+                        self.sessions.discard(session)
+                    owned.discard(session)
+                    self.send(connection, request, result={})
+                elif method == "status.get":
+                    with self.lock:
+                        sessions = [{"sessionId": value} for value in self.sessions]
+                    self.send(connection, request, result={"sessions": sessions})
+                else:
+                    self.send(connection, request, error={"code": "method_not_found"})
+        except (OSError, ValueError) as error:
+            if not self.stop_event.is_set():
+                self.failures.append(str(error))
+        finally:
+            with self.lock:
+                for session in owned:
+                    self.sessions.discard(session)
+                self.owned_connections.discard(connection)
+            if owned:
+                self.disconnected.set()
+            try:
+                connection.close()
+            except OSError:
+                pass
+
+    def disconnect_owned_clients(self):
+        with self.lock:
+            connections = list(self.owned_connections)
+        for connection in connections:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+
+class NativeGuardContractTest(unittest.TestCase):
+    def setUp(self):
+        binary_override = os.environ.get("HERDR_DOPA_TEST_BINARY")
+        self.binary = Path(binary_override) if binary_override else ROOT / "bin/herdr-dopa-monitor"
+        if not self.binary.is_file():
+            self.skipTest("build the release binary with scripts/build.sh first")
+
+    def run_guard(self, command, env, timeout=15):
         return subprocess.run(
-            ["/bin/sh", "-c", script, "dopa-contract-test", str(ROOT)],
-            cwd=str(ROOT),
+            [str(self.binary), *command],
+            cwd=ROOT,
             env=env,
             text=True,
             capture_output=True,
             timeout=timeout,
         )
 
-    def test_hello_builder_uses_api_v1(self):
-        result = self.run_shell(
-            'ROOT="$1"; . "$ROOT/guard/lib.sh"; dopa_hello contract-hello',
-            os.environ.copy(),
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        request = json.loads(result.stdout)
-        self.assertEqual(request["id"], "contract-hello")
-        self.assertEqual(request["method"], "hello")
-        self.assertEqual(request["params"]["apiVersion"], 1)
-        self.assertEqual(request["params"]["client"]["name"], "herdr-dopa-monitor")
-        self.assertEqual(request["params"]["client"]["version"], "0.1.0")
+    @staticmethod
+    def wait_until(predicate, timeout=5):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.05)
+        return False
 
-    def test_hello_validator_enforces_api_and_minimum_version(self):
-        result = self.run_shell(
-            r'''
-set -eu
-ROOT="$1"
-. "$ROOT/guard/lib.sh"
-dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"0.3.3"}}'
-dopa_hello_v1_ok '{"id":"hello","result":{"daemonVersion":"0.3.4","apiVersion":1.0}}'
-dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"0.4.0"}}'
-dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"0.10.0"}}'
-dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"1.0.0"}}'
-! dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"0.3.2"}}'
-! dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"0.2.99"}}'
-! dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":2,"daemonVersion":"0.3.3"}}'
-! dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1}}'
-! dopa_hello_v1_ok '{"id":"hello","result":{"apiVersion":1,"daemonVersion":"0.3.3-beta"}}'
-! dopa_hello_v1_ok '{"id":"hello","error":{"code":"unsupported_version"}}'
-! dopa_hello_v1_ok ''
-''',
-            os.environ.copy(),
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+    @staticmethod
+    def process_is_alive(pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
-    def test_acquire_release_and_disconnect_contract(self):
-        with tempfile.TemporaryDirectory(prefix="herdr-dopa-contract-") as temp_dir:
-            temp = Path(temp_dir)
-            socket_path = temp / "dopa.sock"
-            state_dir = temp / "state"
-            config_dir = temp / "config"
+    def test_acquire_status_idle_release_and_disable_release(self):
+        with tempfile.TemporaryDirectory(prefix="herdr-dopa-native-") as temp_name:
+            temp = Path(temp_name)
+            herdr = FakeHerdrServer(temp / "herdr.sock")
+            dopa = FakeDopaServer(temp / "dopa.sock")
             registry = temp / "plugins.json"
             registry.write_text(
                 '[{"plugin_id":"herdr-dopa-monitor","enabled":true}]\n',
                 encoding="utf-8",
             )
-            server = FakeDopaServer(socket_path)
             env = os.environ.copy()
             env.update(
                 {
-                    "DOPA_SOCK": str(socket_path),
-                    "HERDR_DOPA_STATE_DIR": str(state_dir),
-                    "HERDR_DOPA_CONFIG_DIR": str(config_dir),
+                    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                    "HERDR_SOCKET_PATH": herdr.path,
+                    "DOPA_SOCK": dopa.path,
+                    "HERDR_DOPA_CONFIG_DIR": str(temp / "config"),
+                    "HERDR_DOPA_STATE_DIR": str(temp / "state"),
                     "HERDR_DOPA_PLUGIN_REGISTRY_FILE": str(registry),
-                    "HOME": str(temp / "home"),
                 }
             )
-            script = r'''
-set -eu
-ROOT="$1"
-HOLD_SCRIPT="$ROOT/guard/hold.sh"
-. "$ROOT/guard/lib.sh"
-load_config
-SESSION_ID="$(dopa_acquire)"
-[ "$SESSION_ID" = "fake-session" ]
-dopa_release
-'''
             try:
-                result = self.run_shell(script, env)
-                self.assertEqual(
-                    result.returncode,
-                    0,
-                    "shell contract failed\nstdout:\n%s\nstderr:\n%s"
-                    % (result.stdout, result.stderr),
+                acquired = self.run_guard(["once"], env)
+                self.assertEqual(acquired.returncode, 0, acquired.stderr)
+                self.assertTrue(dopa.acquired.wait(5), dopa.failures)
+                self.assertEqual(dopa.options[-1], {"keepDisplayOn": False})
+
+                status = self.run_guard(["status", "--json"], env)
+                self.assertEqual(status.returncode, 0, status.stderr)
+                payload = json.loads(status.stdout)
+                self.assertEqual(payload["monitor_state"], "on")
+                self.assertEqual(payload["session_id"], "fake-session")
+                self.assertTrue(payload["owned_session_alive"])
+                self.assertEqual(payload["agents"]["working"], 1)
+
+                herdr.working = False
+                stopped = self.run_guard(["once"], env)
+                self.assertEqual(stopped.returncode, 0, stopped.stderr)
+                self.assertTrue(dopa.disconnected.wait(5), dopa.failures)
+                self.assertTrue(self.wait_until(lambda: not dopa.sessions))
+
+                herdr.working = True
+                dopa.acquired.clear()
+                dopa.disconnected.clear()
+                processes = [
+                    subprocess.Popen(
+                        [str(self.binary), "once"], cwd=ROOT, env=env,
+                        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    )
+                    for _ in range(2)
+                ]
+                results = [process.communicate(timeout=15) for process in processes]
+                for process, (_, error) in zip(processes, results):
+                    self.assertEqual(process.returncode, 0, error)
+                self.assertTrue(dopa.acquired.wait(5), dopa.failures)
+                self.assertEqual(dopa.acquire_count, 2, "concurrent once runs double-acquired")
+
+                registry.write_text(
+                    '[{"plugin_id":"herdr-dopa-monitor","enabled":false}]\n',
+                    encoding="utf-8",
                 )
-                self.assertTrue(
-                    server.release_seen.wait(5),
-                    "fake dopa did not receive session.release; requests=%r"
-                    % server.requests,
-                )
-                self.assertTrue(
-                    server.disconnected.wait(5),
-                    "dopa holder did not disconnect after release; requests=%r"
-                    % server.requests,
-                )
-                self.assertEqual(
-                    [request.get("method") for request in server.requests],
-                    ["hello", "session.acquire", "session.release"],
-                )
-                self.assertEqual(server.requests[0]["params"]["apiVersion"], 1)
-                self.assertEqual(
-                    server.requests[1]["params"]["options"]["keepDisplayOn"], False
-                )
-                self.assertEqual(server.requests[2]["params"]["sessionId"], "fake-session")
-                self.assertEqual(server.failures, [])
+                self.assertTrue(dopa.disconnected.wait(5), dopa.failures)
+                self.assertTrue(self.wait_until(lambda: not dopa.sessions))
+                self.assertEqual(herdr.failures, [])
+                self.assertEqual(dopa.failures, [])
             finally:
-                server.close()
+                self.run_guard(["stop"], env)
+                herdr.close()
+                dopa.close()
+
+    def test_incompatible_dopa_is_rejected_before_acquire(self):
+        with tempfile.TemporaryDirectory(prefix="herdr-dopa-version-") as temp_name:
+            temp = Path(temp_name)
+            herdr = FakeHerdrServer(temp / "herdr.sock")
+            dopa = FakeDopaServer(temp / "dopa.sock", daemon_version="0.3.2")
+            registry = temp / "plugins.json"
+            registry.write_text(
+                '[{"plugin_id":"herdr-dopa-monitor","enabled":true}]\n', encoding="utf-8"
+            )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                    "HERDR_SOCKET_PATH": herdr.path,
+                    "DOPA_SOCK": dopa.path,
+                    "HERDR_DOPA_CONFIG_DIR": str(temp / "config"),
+                    "HERDR_DOPA_STATE_DIR": str(temp / "state"),
+                    "HERDR_DOPA_PLUGIN_REGISTRY_FILE": str(registry),
+                }
+            )
+            try:
+                result = self.run_guard(["once"], env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                state = json.loads((temp / "state" / "state.json").read_text())
+                self.assertEqual(state["monitor_state"], "error")
+                self.assertIn("requires Dopa >=0.3.3", state["last_error"])
+                self.assertEqual(dopa.acquire_count, 0)
+            finally:
+                self.run_guard(["stop"], env)
+                herdr.close()
+                dopa.close()
+
+    def test_dopa_disconnect_exits_holder_from_socket_event(self):
+        with tempfile.TemporaryDirectory(prefix="herdr-dopa-disconnect-") as temp_name:
+            temp = Path(temp_name)
+            herdr = FakeHerdrServer(temp / "herdr.sock")
+            dopa = FakeDopaServer(temp / "dopa.sock")
+            registry = temp / "plugins.json"
+            registry.write_text(
+                '[{"plugin_id":"herdr-dopa-monitor","enabled":true}]\n', encoding="utf-8"
+            )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                    "HERDR_SOCKET_PATH": herdr.path,
+                    "DOPA_SOCK": dopa.path,
+                    "HERDR_DOPA_CONFIG_DIR": str(temp / "config"),
+                    "HERDR_DOPA_STATE_DIR": str(temp / "state"),
+                    "HERDR_DOPA_PLUGIN_REGISTRY_FILE": str(registry),
+                }
+            )
+            try:
+                acquired = self.run_guard(["once"], env)
+                self.assertEqual(acquired.returncode, 0, acquired.stderr)
+                self.assertTrue(dopa.acquired.wait(5), dopa.failures)
+                state = json.loads((temp / "state" / "state.json").read_text())
+                holder_pid = state["holder_pid"]
+                self.assertTrue(self.process_is_alive(holder_pid))
+
+                dopa.disconnect_owned_clients()
+
+                self.assertTrue(dopa.disconnected.wait(5), dopa.failures)
+                self.assertTrue(
+                    self.wait_until(lambda: not self.process_is_alive(holder_pid)),
+                    "holder did not exit after the dopa socket closed",
+                )
+            finally:
+                self.run_guard(["stop"], env)
+                herdr.close()
+                dopa.close()
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()
