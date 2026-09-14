@@ -16,7 +16,7 @@ herdr-dopa-monitor` resumes it.
 
 - macOS with the `dopa-daemon` service installed (`sudo dopa-daemon install`).
 - herdr 0.9.0+ for live observation and plugin actions.
-- Stock tools only (`sh`, `nc`, `ps`, `ln`, `grep`, `kill`, `launchctl`, `ioreg`, `plutil`) — no
+- Stock tools only (`sh`, `nc`, `ps`, `ln`, `grep`, `kill`, `launchctl`, `cksum`, `ioreg`, `plutil`) — no
   toolchain, no packages.
 
 ## Quick install
@@ -39,13 +39,9 @@ cd herdr-dopa-monitor
 herdr plugin link .
 ```
 
-Before disabling, run the `stop` action (or `sh guard/stop.sh`) so the owned
-`dopa` session is ended first. Before removing the plugin entirely:
-
-```sh
-sh guard/stop.sh  # end the owned dopa session
-herdr plugin uninstall herdr-dopa-monitor
-```
+Disable or uninstall normally through herdr; no cleanup command is required. The active
+holder watches herdr's plugin registry and releases its owned `dopa` session when the
+plugin is disabled, unlinked, or uninstalled.
 
 ## Usage
 
@@ -93,16 +89,19 @@ the owned session. Reopening the lid does not reacquire it automatically; reacqu
 waits for the next Herdr event (or an explicit manual iteration).
 
 Enable/disable is herdr's switch and the guard respects it: hooks only run while enabled
-(herdr-enforced), and manual commands never hold a session while disabled — a manual run
-then ends the owned session instead. A disabled plugin runs no code, so if a session is
-held at the exact disable moment, run the `stop` action (or `guard/stop.sh`)
-to end it; the next enable reconciles from a clean state otherwise.
+(herdr-enforced), and manual commands never hold a session while disabled. While an owned
+session exists, its lightweight lifecycle watcher reads herdr's global `plugins.json`;
+`enabled=false` or a missing plugin entry closes the holder connection automatically, so
+disable, unlink, and uninstall need no preparatory cleanup command. A malformed or missing
+registry also fails closed. Enabling resumes normal event handling; if agents are already
+working, acquisition occurs on the next Herdr event or explicit manual iteration.
 
-There is no guard-wide lid poll loop: lid polling exists only for an active owned session
-when the setting is enabled. If that session ends because the lid closes or its state
-cannot be read while agents still work, nothing re-acquires it until the next event or
-manual command. The next run heals it when the lid is open and readable, and the all-idle
-stop transition (the case that would leak wakefulness) is itself an event.
+There is no guard-wide lid poll loop: registry monitoring exists only for an active owned
+session, and lid polling exists only when the setting is enabled. If that session ends
+because the lid closes or its state cannot be read while agents still work, nothing
+re-acquires it until the next event or manual command. The next run heals it when the lid
+is open and readable, and the all-idle stop transition (the case that would leak
+wakefulness) is itself an event.
 
 ## Configuration
 

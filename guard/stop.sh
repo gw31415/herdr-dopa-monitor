@@ -39,6 +39,5 @@ LAST_WORKING=false
 LAST_ERROR=""
 save_state
 unlock
-printf "Done. Run \`stop\` before \`herdr plugin uninstall\`"
-printf " so no owned dopa session is left behind.\n"
+printf "Done.\n"
 exit 0

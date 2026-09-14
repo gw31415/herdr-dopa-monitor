@@ -5,7 +5,7 @@
 # dopa-daemon control socket (the connection owns the session — closing it
 # releases the session, same contract as the `dopa` CLI).
 #
-# Stock macOS only: sh, nc -U, mkdir, ln, grep/sed, kill, launchctl, ioreg, plutil.
+# Stock macOS only: sh, nc -U, mkdir, ln, grep/sed, kill, launchctl, cksum, ioreg, plutil.
 
 PLUGIN_ID="herdr-dopa-monitor"
 DEFAULT_DOPA_SOCK="/var/run/dopa/control.sock"
@@ -58,6 +58,22 @@ config_file() { printf "%s/config" "$(config_dir)"; }
 state_file() { printf "%s/state" "$(state_dir)"; }
 lock_dir() { printf "%s/lock" "$(state_dir)"; }
 holder_dir() { printf "%s/holder" "$(state_dir)"; }
+
+# Herdr's global plugin registry. Hook runs expose the plugin config directory,
+# whose third parent is Herdr's config root. Manual runs use the same XDG path.
+plugin_registry_file() {
+    if [ -n "${HERDR_DOPA_PLUGIN_REGISTRY_FILE:-}" ]; then
+        printf "%s" "$HERDR_DOPA_PLUGIN_REGISTRY_FILE"
+    elif [ -n "${HERDR_PLUGIN_CONFIG_DIR:-}" ]; then
+        _plugin_config_parent="$(dirname "$HERDR_PLUGIN_CONFIG_DIR")"
+        _plugin_plugins_dir="$(dirname "$_plugin_config_parent")"
+        printf "%s/plugins.json" "$(dirname "$_plugin_plugins_dir")"
+    elif [ -n "${HERDR_CONFIG_PATH:-}" ]; then
+        printf "%s/plugins.json" "$(dirname "$HERDR_CONFIG_PATH")"
+    else
+        printf "%s/herdr/plugins.json" "${XDG_CONFIG_HOME:-$HOME/.config}"
+    fi
+}
 
 # --- logging (stderr: captured in the herdr plugin command log, and never
 # swallowed by command substitution) ---
@@ -413,7 +429,9 @@ dopa_acquire() {
     mkfifo "$hdir/in"
     # Redirect the supervisor itself so command substitutions calling this
     # function see EOF after the session id is printed. nc has its own files.
+    registry="$(plugin_registry_file)"
     nohup sh "$HOLD_SCRIPT" "$hdir" "$DOPA_SOCK" "$STOP_ON_LID_CLOSE" "$holder_exec" \
+        "$registry" "$PLUGIN_ID" \
         </dev/null >"$hdir/supervisor.out" 2>"$hdir/supervisor.err" &
     holder="$!"
     printf "%s" "$holder" > "$hdir/pid"
@@ -503,7 +521,7 @@ holder_process_alive() {
     esac
 }
 
-# True only for the non-zombie lid watcher that is still a child of holder $1.
+# True only for the non-zombie lifecycle watcher that is still a child of holder $1.
 holder_watcher_alive() {
     _holder_parent="$1"
     _holder_watcher_file="$(holder_dir)/watcher.pid"
@@ -575,9 +593,7 @@ holder_matches_config() {
     [ "$(get_kv "$options" STOP_ON_LID_CLOSE)" = "$STOP_ON_LID_CLOSE" ] || return 1
     _holder_config_pid="$(cat "$(holder_dir)/pid" 2>/dev/null || true)"
     holder_process_alive "$_holder_config_pid" || return 1
-    if [ "$STOP_ON_LID_CLOSE" = "true" ]; then
-        holder_watcher_alive "$_holder_config_pid" || return 1
-    fi
+    holder_watcher_alive "$_holder_config_pid" || return 1
 }
 
 # --- herdr UI (best-effort; skipped silently when unreachable) ---

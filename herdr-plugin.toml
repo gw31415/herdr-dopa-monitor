@@ -51,7 +51,7 @@ command = ["sh", "guard/status.sh"]
 
 [[actions]]
 id = "stop"
-title = "Stop the owned dopa session and reset the guard (run before disable/uninstall)"
+title = "Stop the owned dopa session and reset the guard"
 contexts = ["workspace"]
 command = ["sh", "guard/stop.sh"]
 

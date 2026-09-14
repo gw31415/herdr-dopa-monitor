@@ -1,6 +1,7 @@
 # Manual end-to-end test (real dopa-daemon, fake herdr)
 
-Requires the `dopa-daemon` service installed (`sudo dopa-daemon install`).
+Requires the `dopa-daemon` service installed (`sudo dopa-daemon install`) and this
+checkout linked with `herdr plugin link .`.
 The fake herdr socket below only feeds canned agent lists to the guard —
 nothing else on the system is touched, and the owned `dopa` session is ended
 by the guard itself at the end of the test.
@@ -58,13 +59,18 @@ Two concurrent `once` runs serialize on `<state_dir>/lock`: the second adopts
 the first's saved state (one session total — check `SESSION_ID` is unchanged
 and only one holder `nc` is alive).
 
-6. Disable gate (needs the plugin linked and herdr running):
+6. Disable lifecycle (needs the plugin linked and herdr running):
 
 ```sh
 herdr plugin disable herdr-dopa-monitor
-sh guard/once.sh   # ends the owned session instead of observing
+# the owned session ends automatically within about one second
 herdr plugin enable herdr-dopa-monitor
 ```
+
+Repeat with `herdr plugin unlink herdr-dopa-monitor`: the owned session must end without
+running `guard/stop.sh`. Relink the checkout afterward to continue testing. A managed
+installation can be checked the same way with `herdr plugin uninstall`; no cleanup action
+is required before either command.
 
 7. Clean up:
    `sh guard/stop.sh`; `rm -rf /tmp/dopa-e2e-config /tmp/dopa-e2e-state /tmp/fake-herdr.sock`.
